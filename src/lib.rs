@@ -33,6 +33,7 @@ enum Type {
     BinaryComplex      = b'y',
     Long               = b'l',
     String             = b's',
+    StringRef          = b'R',
     Interned           = b't',
     Ref                = b'r',
     Tuple              = b'(',
@@ -767,6 +768,7 @@ pub mod read {
         depth: Depth,
         readable: R,
         refs: Vec<Obj>,
+        stringrefs: Vec<Obj>,
         has_posonlyargcount: bool,
     }
 
@@ -920,12 +922,29 @@ pub mod read {
                 re: r_float_bin(p)?,
                 im: r_float_bin(p)?,
             })),
-            Type::String => Some(Obj::Bytes(Arc::new(r_bytes(r_long(p)? as usize, p)?))),
+            Type::String => {
+                let obj = Obj::Bytes(Arc::new(r_bytes(r_long(p)? as usize, p)?));
+                p.stringrefs.push(obj.clone());
+                Some(obj)
+            },
+            Type::StringRef =>  {
+                let n = r_long(p)? as usize;
+                let result = p.stringrefs.get(n).ok_or(ErrorKind::InvalidRef)?.clone();
+                if result.is_none() {
+                    return Err(ErrorKind::InvalidRef.into());
+                } else {
+                    Some(result)
+                }
+            },
             Type::AsciiInterned | Type::Ascii | Type::Interned | Type::Unicode => {
-                Some(Obj::Bytes(Arc::new(r_bytes(r_long(p)? as usize, p)?)))
+                let obj = Obj::Bytes(Arc::new(r_bytes(r_long(p)? as usize, p)?));
+                p.stringrefs.push(obj.clone());
+                Some(obj)
             }
             Type::ShortAsciiInterned | Type::ShortAscii => {
-                Some(Obj::Bytes(Arc::new(r_bytes(r_byte(p)? as usize, p)?)))
+                let obj = Obj::Bytes(Arc::new(r_bytes(r_byte(p)? as usize, p)?));
+                p.stringrefs.push(obj.clone());
+                Some(obj)
             }
             Type::SmallTuple => Some(Obj::Tuple(Arc::new(r_vec(r_byte(p)? as usize, p)?))),
             Type::Tuple => Some(Obj::Tuple(Arc::new(r_vec(r_long(p)? as usize, p)?))),
@@ -1046,6 +1065,7 @@ pub mod read {
             depth: Depth::new(),
             readable,
             refs: Vec::<Obj>::new(),
+            stringrefs: Vec::<Obj>::new(),
             has_posonlyargcount: opts.has_posonlyargcount,
         };
         read_object(&mut rf)
