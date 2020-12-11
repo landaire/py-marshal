@@ -115,12 +115,12 @@ pub struct Code {
     pub flags:           CodeFlags,
     pub code:            Arc<Vec<u8>>,
     pub consts:          Arc<Vec<Obj>>,
-    pub names:           Vec<Arc<String>>,
-    pub varnames:        Vec<Arc<String>>,
-    pub freevars:        Vec<Arc<String>>,
-    pub cellvars:        Vec<Arc<String>>,
-    pub filename:        Arc<String>,
-    pub name:            Arc<String>,
+    pub names:           Vec<Arc<Vec<u8>>>,
+    pub varnames:        Vec<Arc<Vec<u8>>>,
+    pub freevars:        Vec<Arc<Vec<u8>>>,
+    pub cellvars:        Vec<Arc<Vec<u8>>>,
+    pub filename:        Arc<Vec<u8>>,
+    pub name:            Arc<Vec<u8>>,
     pub firstlineno:     u32,
     pub lnotab:          Arc<Vec<u8>>,
 }
@@ -922,10 +922,10 @@ pub mod read {
             })),
             Type::String => Some(Obj::Bytes(Arc::new(r_bytes(r_long(p)? as usize, p)?))),
             Type::AsciiInterned | Type::Ascii | Type::Interned | Type::Unicode => {
-                Some(Obj::String(Arc::new(r_string(r_long(p)? as usize, p)?)))
+                Some(Obj::Bytes(Arc::new(r_bytes(r_long(p)? as usize, p)?)))
             }
             Type::ShortAsciiInterned | Type::ShortAscii => {
-                Some(Obj::String(Arc::new(r_string(r_byte(p)? as usize, p)?)))
+                Some(Obj::Bytes(Arc::new(r_bytes(r_byte(p)? as usize, p)?)))
             }
             Type::SmallTuple => Some(Obj::Tuple(Arc::new(r_vec(r_byte(p)? as usize, p)?))),
             Type::Tuple => Some(Obj::Tuple(Arc::new(r_vec(r_long(p)? as usize, p)?))),
@@ -948,8 +948,8 @@ pub mod read {
             Type::Dict => Some(Obj::Dict(Arc::new(RwLock::new(r_hashmap(p)?)))),
             Type::Code => Some(Obj::Code(Arc::new(Code {
                 argcount: r_long(p)?,
-                posonlyargcount: if p.has_posonlyargcount { r_long(p)? } else { 0 },
-                kwonlyargcount: r_long(p)?,
+                posonlyargcount: if cfg!(not(feature = "python27")) && p.has_posonlyargcount { r_long(p)? } else { 0 },
+                kwonlyargcount: if cfg!(not(feature = "python27"))  { r_long(p)? } else { 0 },
                 nlocals: r_long(p)?,
                 stacksize: r_long(p)?,
                 flags: CodeFlags::from_bits_truncate(r_long(p)?),
@@ -996,9 +996,9 @@ pub mod read {
     fn r_object_not_null(p: &mut RFile<impl Read>) -> Result<Obj> {
         Ok(r_object(p)?.ok_or(ErrorKind::IsNull)?)
     }
-    fn r_object_extract_string(p: &mut RFile<impl Read>) -> Result<Arc<String>> {
+    fn r_object_extract_string(p: &mut RFile<impl Read>) -> Result<Arc<Vec<u8>>> {
         Ok(r_object_not_null(p)?
-            .extract_string()
+            .extract_bytes()
             .map_err(ErrorKind::TypeError)?)
     }
     fn r_object_extract_bytes(p: &mut RFile<impl Read>) -> Result<Arc<Vec<u8>>> {
@@ -1011,15 +1011,15 @@ pub mod read {
             .extract_tuple()
             .map_err(ErrorKind::TypeError)?)
     }
-    fn r_object_extract_tuple_string(p: &mut RFile<impl Read>) -> Result<Vec<Arc<String>>> {
+    fn r_object_extract_tuple_string(p: &mut RFile<impl Read>) -> Result<Vec<Arc<Vec<u8>>>> {
         Ok(r_object_extract_tuple(p)?
             .iter()
             .map(|x| {
                 x.clone()
-                    .extract_string()
+                    .extract_bytes()
                     .map_err(|o: Obj| Error::from(ErrorKind::TypeError(o)))
             })
-            .collect::<Result<Vec<Arc<String>>>>()?)
+            .collect::<Result<Vec<Arc<Vec<u8>>>>>()?)
     }
 
     fn read_object(p: &mut RFile<impl Read>) -> Result<Obj> {
