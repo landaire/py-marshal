@@ -1,4 +1,3 @@
-
 #[allow(clippy::wildcard_imports)] // read::errors
 pub mod errors {
     use error_chain::error_chain;
@@ -146,9 +145,7 @@ fn r_hashset_into(
     p: &mut RFile<impl Read>,
 ) -> Result<()> {
     for _ in 0..n {
-        set.insert(
-            ObjHashable::try_from(&r_object_not_null(p)?).map_err(ErrorKind::Unhashable)?,
-        );
+        set.insert(ObjHashable::try_from(&r_object_not_null(p)?).map_err(ErrorKind::Unhashable)?);
     }
     Ok(())
 }
@@ -201,8 +198,8 @@ fn r_object(p: &mut RFile<impl Read>) -> Result<Option<Obj>> {
             let obj = Obj::Bytes(Arc::new(r_bytes(r_long(p)? as usize, p)?));
             p.stringrefs.push(obj.clone());
             Some(obj)
-        },
-        Type::StringRef =>  {
+        }
+        Type::StringRef => {
             let n = r_long(p)? as usize;
             let result = p.stringrefs.get(n).ok_or(ErrorKind::InvalidRef)?.clone();
             if result.is_none() {
@@ -210,7 +207,7 @@ fn r_object(p: &mut RFile<impl Read>) -> Result<Option<Obj>> {
             } else {
                 Some(result)
             }
-        },
+        }
         Type::AsciiInterned | Type::Ascii | Type::Interned | Type::Unicode => {
             let obj = Obj::Bytes(Arc::new(r_bytes(r_long(p)? as usize, p)?));
             p.stringrefs.push(obj.clone());
@@ -242,8 +239,16 @@ fn r_object(p: &mut RFile<impl Read>) -> Result<Option<Obj>> {
         Type::Dict => Some(Obj::Dict(Arc::new(RwLock::new(r_hashmap(p)?)))),
         Type::Code => Some(Obj::Code(Arc::new(Code {
             argcount: r_long(p)?,
-            posonlyargcount: if cfg!(not(feature = "python27")) && p.has_posonlyargcount { r_long(p)? } else { 0 },
-            kwonlyargcount: if cfg!(not(feature = "python27"))  { r_long(p)? } else { 0 },
+            posonlyargcount: if cfg!(not(feature = "python27")) && p.has_posonlyargcount {
+                r_long(p)?
+            } else {
+                0
+            },
+            kwonlyargcount: if cfg!(not(feature = "python27")) {
+                r_long(p)?
+            } else {
+                0
+            },
             nlocals: r_long(p)?,
             stacksize: r_long(p)?,
             flags: CodeFlags::from_bits_truncate(r_long(p)?),
@@ -782,11 +787,9 @@ mod test {
             errors::ErrorKind::RecursionLimitExceeded
         );
         assert_match!(
-            marshal_loads(
-                &[&b"{N".repeat(1048576)[..], b"N", &b"0".repeat(1048576)[..]].concat()
-            )
-            .unwrap_err()
-            .kind(),
+            marshal_loads(&[&b"{N".repeat(1048576)[..], b"N", &b"0".repeat(1048576)[..]].concat())
+                .unwrap_err()
+                .kind(),
             errors::ErrorKind::RecursionLimitExceeded
         );
         assert_match!(
