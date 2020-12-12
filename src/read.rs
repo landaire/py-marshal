@@ -1,32 +1,40 @@
 #[allow(clippy::wildcard_imports)] // read::errors
 pub mod errors {
-    use error_chain::error_chain;
+    use thiserror::Error;
 
-    error_chain! {
-        foreign_links {
-            Io(::std::io::Error);
-            Utf8(::std::str::Utf8Error);
-            FromUtf8(::std::string::FromUtf8Error);
-            ParseFloat(::std::num::ParseFloatError);
-        }
+    #[derive(Debug, Error)]
+    pub enum ErrorKind {
+        #[error("invalid type: 0x{0:X}")]
+        InvalidType(u8),
+        #[error("recursion limit exceeded")]
+        RecursionLimitExceeded,
+        #[error("digit is out of range: {0}")]
+        DigitOutOfRange(u16),
+        #[error("unnormalized long")]
+        UnnormalizedLong,
+        #[error("null object")]
+        IsNull,
+        #[error("encountered unhashable: {0:?}")]
+        Unhashable(crate::Obj),
+        #[error("type error: {0:?}")]
+        TypeError(crate::Obj),
+        #[error("invalid reference")]
+        InvalidRef,
 
-        errors {
-            InvalidType(x: u8)
-            RecursionLimitExceeded
-            DigitOutOfRange(x: u16)
-            UnnormalizedLong
-            IsNull
-            Unhashable(x: crate::Obj)
-            TypeError(x: crate::Obj)
-            InvalidRef
-        }
-
-        skip_msg_variant
+        #[error("IO error occurred: {0}")]
+        Io(#[from] std::io::Error),
+        #[error("Error occurred while creating a str: {0}")]
+        Utf8(#[from] std::str::Utf8Error),
+        #[error("Error occurred while creating a string from utf8: {0}")]
+        FromUtf8(#[from] std::string::FromUtf8Error),
+        #[error("Error occurred while parsing float: {0}")]
+        ParseFloat(#[from] std::num::ParseFloatError),
     }
 }
 
 use self::errors::*;
 use crate::{utils, Code, CodeFlags, Depth, Obj, ObjHashable, Type};
+use bstr::BString;
 use num_bigint::BigInt;
 use num_complex::Complex;
 use num_traits::{FromPrimitive, Zero};
@@ -38,6 +46,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+pub type ParseResult<T> = Result<T, ErrorKind>;
+
 struct RFile<R: Read> {
     depth: Depth,
     readable: R,
@@ -48,7 +58,7 @@ struct RFile<R: Read> {
 
 macro_rules! define_r {
     ($ident:ident -> $ty:ty; $n:literal) => {
-        fn $ident(p: &mut RFile<impl Read>) -> Result<$ty> {
+        fn $ident(p: &mut RFile<impl Read>) -> ParseResult<$ty> {
             let mut buf: [u8; $n] = [0; $n];
             p.readable.read_exact(&mut buf)?;
             Ok(<$ty>::from_le_bytes(buf))
@@ -62,27 +72,32 @@ define_r! { r_long      -> u32; 4 }
 define_r! { r_long64    -> u64; 8 }
 define_r! { r_float_bin -> f64; 8 }
 
-fn r_bytes(n: usize, p: &mut RFile<impl Read>) -> Result<Vec<u8>> {
+fn r_bytes(n: usize, p: &mut RFile<impl Read>) -> ParseResult<Vec<u8>> {
     let mut buf = Vec::new();
     buf.resize(n, 0);
     p.readable.read_exact(&mut buf)?;
     Ok(buf)
 }
 
-fn r_string(n: usize, p: &mut RFile<impl Read>) -> Result<String> {
+fn r_string(n: usize, p: &mut RFile<impl Read>) -> ParseResult<String> {
     let buf = r_bytes(n, p)?;
     Ok(String::from_utf8(buf)?)
 }
 
-fn r_float_str(p: &mut RFile<impl Read>) -> Result<f64> {
+fn r_bstring(n: usize, p: &mut RFile<impl Read>) -> ParseResult<BString> {
+    let buf = r_bytes(n, p)?;
+    Ok(BString::from(buf))
+}
+
+fn r_float_str(p: &mut RFile<impl Read>) -> ParseResult<f64> {
     let n = r_byte(p)?;
     let s = r_string(n as usize, p)?;
-    Ok(f64::from_str(&s)?)
+    Ok(f64::from_str(s.as_ref())?)
 }
 
 // TODO: test
 /// May misbehave on 16-bit platforms.
-fn r_pylong(p: &mut RFile<impl Read>) -> Result<BigInt> {
+fn r_pylong(p: &mut RFile<impl Read>) -> ParseResult<BigInt> {
     #[allow(clippy::cast_possible_wrap)]
     let n = r_long(p)? as i32;
     if n == 0 {
@@ -107,7 +122,7 @@ fn r_pylong(p: &mut RFile<impl Read>) -> Result<BigInt> {
     ))
 }
 
-fn r_vec(n: usize, p: &mut RFile<impl Read>) -> Result<Vec<Obj>> {
+fn r_vec(n: usize, p: &mut RFile<impl Read>) -> ParseResult<Vec<Obj>> {
     let mut vec = Vec::with_capacity(n);
     for _ in 0..n {
         vec.push(r_object_not_null(p)?);
@@ -115,7 +130,7 @@ fn r_vec(n: usize, p: &mut RFile<impl Read>) -> Result<Vec<Obj>> {
     Ok(vec)
 }
 
-fn r_hashmap(p: &mut RFile<impl Read>) -> Result<HashMap<ObjHashable, Obj>> {
+fn r_hashmap(p: &mut RFile<impl Read>) -> ParseResult<HashMap<ObjHashable, Obj>> {
     let mut map = HashMap::new();
     loop {
         match r_object(p)? {
@@ -134,16 +149,17 @@ fn r_hashmap(p: &mut RFile<impl Read>) -> Result<HashMap<ObjHashable, Obj>> {
     Ok(map)
 }
 
-fn r_hashset(n: usize, p: &mut RFile<impl Read>) -> Result<HashSet<ObjHashable>> {
+fn r_hashset(n: usize, p: &mut RFile<impl Read>) -> ParseResult<HashSet<ObjHashable>> {
     let mut set = HashSet::new();
     r_hashset_into(&mut set, n, p)?;
     Ok(set)
 }
+
 fn r_hashset_into(
     set: &mut HashSet<ObjHashable>,
     n: usize,
     p: &mut RFile<impl Read>,
-) -> Result<()> {
+) -> ParseResult<()> {
     for _ in 0..n {
         set.insert(ObjHashable::try_from(&r_object_not_null(p)?).map_err(ErrorKind::Unhashable)?);
     }
@@ -151,7 +167,7 @@ fn r_hashset_into(
 }
 
 #[allow(clippy::too_many_lines)]
-fn r_object(p: &mut RFile<impl Read>) -> Result<Option<Obj>> {
+fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
     let code: u8 = r_byte(p)?;
     let _depth_handle = p
         .depth
@@ -162,6 +178,10 @@ fn r_object(p: &mut RFile<impl Read>) -> Result<Option<Obj>> {
         let type_u8: u8 = code & !Type::FLAG_REF;
         let type_: Type =
             Type::from_u8(type_u8).map_or(Err(ErrorKind::InvalidType(type_u8)), Ok)?;
+        if let Type::Bytes = type_ {
+            // this is a fake type
+            return Err(ErrorKind::InvalidType(type_u8));
+        }
         (flag, type_)
     };
     let mut idx: Option<usize> = match type_ {
@@ -175,6 +195,7 @@ fn r_object(p: &mut RFile<impl Read>) -> Result<Option<Obj>> {
     };
     #[allow(clippy::cast_possible_wrap)]
     let retval = match type_ {
+        Type::Bytes => unreachable!(),
         Type::Null => None,
         Type::None => Some(Obj::None),
         Type::StopIter => Some(Obj::StopIteration),
@@ -195,7 +216,7 @@ fn r_object(p: &mut RFile<impl Read>) -> Result<Option<Obj>> {
             im: r_float_bin(p)?,
         })),
         Type::String => {
-            let obj = Obj::Bytes(Arc::new(r_bytes(r_long(p)? as usize, p)?));
+            let obj = Obj::String(Arc::new(r_bstring(r_long(p)? as usize, p)?));
             p.stringrefs.push(obj.clone());
             Some(obj)
         }
@@ -209,12 +230,12 @@ fn r_object(p: &mut RFile<impl Read>) -> Result<Option<Obj>> {
             }
         }
         Type::AsciiInterned | Type::Ascii | Type::Interned | Type::Unicode => {
-            let obj = Obj::Bytes(Arc::new(r_bytes(r_long(p)? as usize, p)?));
+            let obj = Obj::String(Arc::new(r_bstring(r_long(p)? as usize, p)?));
             p.stringrefs.push(obj.clone());
             Some(obj)
         }
         Type::ShortAsciiInterned | Type::ShortAscii => {
-            let obj = Obj::Bytes(Arc::new(r_bytes(r_byte(p)? as usize, p)?));
+            let obj = Obj::String(Arc::new(r_bstring(r_byte(p)? as usize, p)?));
             p.stringrefs.push(obj.clone());
             Some(obj)
         }
@@ -239,16 +260,6 @@ fn r_object(p: &mut RFile<impl Read>) -> Result<Option<Obj>> {
         Type::Dict => Some(Obj::Dict(Arc::new(RwLock::new(r_hashmap(p)?)))),
         Type::Code => Some(Obj::Code(Arc::new(Code {
             argcount: r_long(p)?,
-            posonlyargcount: if cfg!(not(feature = "python27")) && p.has_posonlyargcount {
-                r_long(p)?
-            } else {
-                0
-            },
-            kwonlyargcount: if cfg!(not(feature = "python27")) {
-                r_long(p)?
-            } else {
-                0
-            },
             nlocals: r_long(p)?,
             stacksize: r_long(p)?,
             flags: CodeFlags::from_bits_truncate(r_long(p)?),
@@ -292,36 +303,34 @@ fn r_object(p: &mut RFile<impl Read>) -> Result<Option<Obj>> {
     Ok(retval)
 }
 
-fn r_object_not_null(p: &mut RFile<impl Read>) -> Result<Obj> {
+fn r_object_not_null(p: &mut RFile<impl Read>) -> ParseResult<Obj> {
     Ok(r_object(p)?.ok_or(ErrorKind::IsNull)?)
 }
-fn r_object_extract_string(p: &mut RFile<impl Read>) -> Result<Arc<Vec<u8>>> {
+fn r_object_extract_string(p: &mut RFile<impl Read>) -> ParseResult<Arc<BString>> {
     Ok(r_object_not_null(p)?
-        .extract_bytes()
+        .extract_string()
         .map_err(ErrorKind::TypeError)?)
 }
-fn r_object_extract_bytes(p: &mut RFile<impl Read>) -> Result<Arc<Vec<u8>>> {
+fn r_object_extract_bytes(p: &mut RFile<impl Read>) -> ParseResult<Arc<Vec<u8>>> {
     Ok(r_object_not_null(p)?
-        .extract_bytes()
+        .extract_string()
         .map_err(ErrorKind::TypeError)?)
+    // this forces an allocation but makes some operations easier
+    .map(|bytes| Arc::new(bytes.to_vec()))
 }
-fn r_object_extract_tuple(p: &mut RFile<impl Read>) -> Result<Arc<Vec<Obj>>> {
+fn r_object_extract_tuple(p: &mut RFile<impl Read>) -> ParseResult<Arc<Vec<Obj>>> {
     Ok(r_object_not_null(p)?
         .extract_tuple()
         .map_err(ErrorKind::TypeError)?)
 }
-fn r_object_extract_tuple_string(p: &mut RFile<impl Read>) -> Result<Vec<Arc<Vec<u8>>>> {
+fn r_object_extract_tuple_string(p: &mut RFile<impl Read>) -> ParseResult<Vec<Arc<BString>>> {
     Ok(r_object_extract_tuple(p)?
         .iter()
-        .map(|x| {
-            x.clone()
-                .extract_bytes()
-                .map_err(|o: Obj| Error::from(ErrorKind::TypeError(o)))
-        })
-        .collect::<Result<Vec<Arc<Vec<u8>>>>>()?)
+        .map(|x| x.clone().extract_string().map_err(ErrorKind::TypeError))
+        .collect::<ParseResult<Vec<Arc<BString>>>>()?)
 }
 
-fn read_object(p: &mut RFile<impl Read>) -> Result<Obj> {
+fn read_object(p: &mut RFile<impl Read>) -> ParseResult<Obj> {
     r_object_not_null(p)
 }
 
@@ -340,7 +349,7 @@ impl Default for MarshalLoadExOptions {
 
 /// # Errors
 /// See [`ErrorKind`].
-pub fn marshal_load_ex(readable: impl Read, opts: MarshalLoadExOptions) -> Result<Obj> {
+pub fn marshal_load_ex(readable: impl Read, opts: MarshalLoadExOptions) -> ParseResult<Obj> {
     let mut rf = RFile {
         depth: Depth::new(),
         readable,
@@ -353,14 +362,14 @@ pub fn marshal_load_ex(readable: impl Read, opts: MarshalLoadExOptions) -> Resul
 
 /// # Errors
 /// See [`ErrorKind`].
-pub fn marshal_load(readable: impl Read) -> Result<Obj> {
+pub fn marshal_load(readable: impl Read) -> ParseResult<Obj> {
     marshal_load_ex(readable, MarshalLoadExOptions::default())
 }
 
 /// Allows coercion from array reference to slice.
 /// # Errors
 /// See [`ErrorKind`].
-pub fn marshal_loads(bytes: &[u8]) -> Result<Obj> {
+pub fn marshal_loads(bytes: &[u8]) -> ParseResult<Obj> {
     marshal_load(bytes)
 }
 
@@ -371,6 +380,7 @@ mod test {
         errors, marshal_load, marshal_load_ex, marshal_loads, Code, CodeFlags,
         MarshalLoadExOptions, Obj, ObjHashable,
     };
+    use bstr::BString;
     use num_bigint::BigInt;
     use num_traits::Pow;
     use std::{
@@ -546,7 +556,7 @@ mod test {
     fn assert_test_exceptions_code_valid(code: &Code) {
         assert_eq!(code.argcount, 1);
         assert!(code.cellvars.is_empty());
-        assert_eq!(*code.code, b"t\x00\xa0\x01t\x00\xa0\x02t\x03\xa1\x01\xa1\x01}\x01|\x00\xa0\x04t\x03|\x01\xa1\x02\x01\x00d\x00S\x00");
+        assert_eq!(*code.code, &b"t\x00\xa0\x01t\x00\xa0\x02t\x03\xa1\x01\xa1\x01}\x01|\x00\xa0\x04t\x03|\x01\xa1\x02\x01\x00d\x00S\x00"[..]);
         assert_eq!(code.consts.len(), 1);
         assert!(code.consts[0].is_none());
         assert_eq!(*code.filename, "<string>");
@@ -556,8 +566,7 @@ mod test {
             CodeFlags::NOFREE | CodeFlags::NEWLOCALS | CodeFlags::OPTIMIZED
         );
         assert!(code.freevars.is_empty());
-        assert_eq!(code.kwonlyargcount, 0);
-        assert_eq!(*code.lnotab, b"\x00\x01\x10\x01");
+        assert_eq!(*code.lnotab, &b"\x00\x01\x10\x01"[..]);
         assert_eq!(*code.name, "test_exceptions");
         assert!(code.names.iter().map(Deref::deref).eq(vec![
             "marshal",
@@ -580,7 +589,7 @@ mod test {
     fn test_code() {
         // ExceptionTestCase.test_exceptions
         // { 'co_argcount': 1, 'co_cellvars': (), 'co_code': b't\x00\xa0\x01t\x00\xa0\x02t\x03\xa1\x01\xa1\x01}\x01|\x00\xa0\x04t\x03|\x01\xa1\x02\x01\x00d\x00S\x00', 'co_consts': (None,), 'co_filename': '<string>', 'co_firstlineno': 3, 'co_flags': 67, 'co_freevars': (), 'co_kwonlyargcount': 0, 'co_lnotab': b'\x00\x01\x10\x01', 'co_name': 'test_exceptions', 'co_names': ('marshal', 'loads', 'dumps', 'StopIteration', 'assertEqual'), 'co_nlocals': 2, 'co_stacksize': 5, 'co_varnames': ('self', 'new') }
-        let mut input: &[u8] = b"\xe3\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x05\x00\x00\x00C\x00\x00\x00s \x00\x00\x00t\x00\xa0\x01t\x00\xa0\x02t\x03\xa1\x01\xa1\x01}\x01|\x00\xa0\x04t\x03|\x01\xa1\x02\x01\x00d\x00S\x00)\x01N)\x05\xda\x07marshal\xda\x05loads\xda\x05dumps\xda\rStopIteration\xda\x0bassertEqual)\x02\xda\x04self\xda\x03new\xa9\x00r\x08\x00\x00\x00\xda\x08<string>\xda\x0ftest_exceptions\x03\x00\x00\x00s\x04\x00\x00\x00\x00\x01\x10\x01";
+        let mut input: &[u8] = b"\xe3\x01\x00\x00\x00\x02\x00\x00\x00\x05\x00\x00\x00C\x00\x00\x00s \x00\x00\x00t\x00\xa0\x01t\x00\xa0\x02t\x03\xa1\x01\xa1\x01}\x01|\x00\xa0\x04t\x03|\x01\xa1\x02\x01\x00d\x00S\x00)\x01N)\x05\xda\x07marshal\xda\x05loads\xda\x05dumps\xda\rStopIteration\xda\x0bassertEqual)\x02\xda\x04self\xda\x03new\xa9\x00r\x08\x00\x00\x00\xda\x08<string>\xda\x0ftest_exceptions\x03\x00\x00\x00s\x04\x00\x00\x00\x00\x01\x10\x01";
         println!("{}", input.len());
         let code_result = marshal_load_ex(
             &mut input,
@@ -595,7 +604,7 @@ mod test {
 
     #[test]
     fn test_many_codeobjects() {
-        let mut input: &[u8] = &[b"(\x88\x13\x00\x00\xe3\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x05\x00\x00\x00C\x00\x00\x00s \x00\x00\x00t\x00\xa0\x01t\x00\xa0\x02t\x03\xa1\x01\xa1\x01}\x01|\x00\xa0\x04t\x03|\x01\xa1\x02\x01\x00d\x00S\x00)\x01N)\x05\xda\x07marshal\xda\x05loads\xda\x05dumps\xda\rStopIteration\xda\x0bassertEqual)\x02\xda\x04self\xda\x03new\xa9\x00r\x08\x00\x00\x00\xda\x08<string>\xda\x0ftest_exceptions\x03\x00\x00\x00s\x04\x00\x00\x00\x00\x01\x10\x01" as &[u8], &b"r\x00\x00\x00\x00".repeat(4999)].concat();
+        let mut input: &[u8] = &[b"(\x88\x13\x00\x00\xe3\x01\x00\x00\x00\x02\x00\x00\x00\x05\x00\x00\x00C\x00\x00\x00s \x00\x00\x00t\x00\xa0\x01t\x00\xa0\x02t\x03\xa1\x01\xa1\x01}\x01|\x00\xa0\x04t\x03|\x01\xa1\x02\x01\x00d\x00S\x00)\x01N)\x05\xda\x07marshal\xda\x05loads\xda\x05dumps\xda\rStopIteration\xda\x0bassertEqual)\x02\xda\x04self\xda\x03new\xa9\x00r\x08\x00\x00\x00\xda\x08<string>\xda\x0ftest_exceptions\x03\x00\x00\x00s\x04\x00\x00\x00\x00\x01\x10\x01" as &[u8], &b"r\x00\x00\x00\x00".repeat(4999)].concat();
         let result = marshal_load_ex(
             &mut input,
             MarshalLoadExOptions {
@@ -610,7 +619,7 @@ mod test {
 
     #[test]
     fn test_different_filenames() {
-        let mut input: &[u8] = b")\x02c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00@\x00\x00\x00s\x08\x00\x00\x00e\x00\x01\x00d\x00S\x00)\x01N)\x01\xda\x01x\xa9\x00r\x01\x00\x00\x00r\x01\x00\x00\x00\xda\x02f1\xda\x08<module>\x01\x00\x00\x00\xf3\x00\x00\x00\x00c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00@\x00\x00\x00s\x08\x00\x00\x00e\x00\x01\x00d\x00S\x00)\x01N)\x01\xda\x01yr\x01\x00\x00\x00r\x01\x00\x00\x00r\x01\x00\x00\x00\xda\x02f2r\x03\x00\x00\x00\x01\x00\x00\x00r\x04\x00\x00\x00";
+        let mut input: &[u8] = b")\x02c\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00@\x00\x00\x00s\x08\x00\x00\x00e\x00\x01\x00d\x00S\x00)\x01N)\x01\xda\x01x\xa9\x00r\x01\x00\x00\x00r\x01\x00\x00\x00\xda\x02f1\xda\x08<module>\x01\x00\x00\x00\xf3\x00\x00\x00\x00c\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00@\x00\x00\x00s\x08\x00\x00\x00e\x00\x01\x00d\x00S\x00)\x01N)\x01\xda\x01yr\x01\x00\x00\x00r\x01\x00\x00\x00r\x01\x00\x00\x00\xda\x02f2r\x03\x00\x00\x00\x01\x00\x00\x00r\x04\x00\x00\x00";
         println!("{}", input.len());
         let result = marshal_load_ex(
             &mut input,
@@ -636,35 +645,35 @@ mod test {
         let dict = dict_ref.try_read().unwrap();
         assert_eq!(dict.len(), 8);
         assert_eq!(
-            *dict[&ObjHashable::String(Arc::new("astring".to_owned()))]
+            *dict[&ObjHashable::String(Arc::new(BString::from("astring")))]
                 .clone()
                 .extract_string()
                 .unwrap(),
             "foo@bar.baz.spam"
         );
         assert_eq!(
-            dict[&ObjHashable::String(Arc::new("afloat".to_owned()))]
+            dict[&ObjHashable::String(Arc::new(BString::from("afloat")))]
                 .clone()
                 .extract_float()
                 .unwrap(),
             7283.43_f64
         );
         assert_eq!(
-            *dict[&ObjHashable::String(Arc::new("anint".to_owned()))]
+            *dict[&ObjHashable::String(Arc::new(BString::from("anint")))]
                 .clone()
                 .extract_long()
                 .unwrap(),
             BigInt::from(2).pow(20_u8)
         );
         assert_eq!(
-            *dict[&ObjHashable::String(Arc::new("ashortlong".to_owned()))]
+            *dict[&ObjHashable::String(Arc::new(BString::from("ashortlong")))]
                 .clone()
                 .extract_long()
                 .unwrap(),
             BigInt::from(2)
         );
 
-        let list_ref = dict[&ObjHashable::String(Arc::new("alist".to_owned()))]
+        let list_ref = dict[&ObjHashable::String(Arc::new(BString::from("alist")))]
             .clone()
             .extract_list()
             .unwrap();
@@ -672,7 +681,7 @@ mod test {
         assert_eq!(list.len(), 1);
         assert_eq!(*list[0].clone().extract_string().unwrap(), ".zyx.41");
 
-        let tuple = dict[&ObjHashable::String(Arc::new("atuple".to_owned()))]
+        let tuple = dict[&ObjHashable::String(Arc::new(BString::from("atuple")))]
             .clone()
             .extract_tuple()
             .unwrap();
@@ -681,14 +690,14 @@ mod test {
             assert_eq!(*o.clone().extract_string().unwrap(), ".zyx.41");
         }
         assert_eq!(
-            dict[&ObjHashable::String(Arc::new("aboolean".to_owned()))]
+            dict[&ObjHashable::String(Arc::new(BString::from("aboolean")))]
                 .clone()
                 .extract_bool()
                 .unwrap(),
             false
         );
         assert_eq!(
-            *dict[&ObjHashable::String(Arc::new("aunicode".to_owned()))]
+            *dict[&ObjHashable::String(Arc::new(BString::from("aunicode")))]
                 .clone()
                 .extract_string()
                 .unwrap(),
@@ -705,8 +714,8 @@ mod test {
         assert_eq!(dict.read().unwrap().len(), 1);
         assert_eq!(
             *dict.read().unwrap()[&ObjHashable::Tuple(Arc::new(vec![
-                ObjHashable::String(Arc::new("a".to_owned())),
-                ObjHashable::String(Arc::new("b".to_owned()))
+                ObjHashable::String(Arc::new(BString::from("a"))),
+                ObjHashable::String(Arc::new(BString::from("b")))
             ]))]
                 .clone()
                 .extract_string()
@@ -730,12 +739,9 @@ mod test {
 
     #[test]
     fn test_patch_873224() {
-        assert_match!(
-            marshal_loads(b"0").unwrap_err().kind(),
-            errors::ErrorKind::IsNull
-        );
+        assert_match!(marshal_loads(b"0").unwrap_err(), errors::ErrorKind::IsNull);
         let f_err = marshal_loads(b"f").unwrap_err();
-        match f_err.kind() {
+        match f_err {
             errors::ErrorKind::Io(io_err) => {
                 assert_eq!(io_err.kind(), io::ErrorKind::UnexpectedEof);
             }
@@ -743,7 +749,7 @@ mod test {
         }
         let int_err =
             marshal_loads(b"l\x05\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 ").unwrap_err();
-        match int_err.kind() {
+        match int_err {
             errors::ErrorKind::Io(io_err) => {
                 assert_eq!(io_err.kind(), io::ErrorKind::UnexpectedEof);
             }
@@ -803,9 +809,7 @@ mod test {
     #[test]
     fn test_invalid_longs() {
         assert_match!(
-            marshal_loads(b"l\x02\x00\x00\x00\x00\x00\x00\x00")
-                .unwrap_err()
-                .kind(),
+            marshal_loads(b"l\x02\x00\x00\x00\x00\x00\x00\x00").unwrap_err(),
             errors::ErrorKind::UnnormalizedLong
         );
     }

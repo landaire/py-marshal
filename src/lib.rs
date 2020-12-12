@@ -1,5 +1,7 @@
 // Ported from <https://github.com/python/cpython/blob/master/Python/marshal.c>
 use bitflags::bitflags;
+pub use bstr;
+use bstr::{BStr, BString};
 use num_bigint::BigInt;
 use num_complex::Complex;
 use num_derive::{FromPrimitive, ToPrimitive};
@@ -20,7 +22,7 @@ pub type ArcRwLock<T> = Arc<RwLock<T>>;
 
 #[derive(FromPrimitive, ToPrimitive, Debug, Copy, Clone)]
 #[repr(u8)]
-pub(crate) enum Type {
+pub enum Type {
     Null               = b'0',
     None               = b'N',
     False              = b'F',
@@ -51,6 +53,8 @@ pub(crate) enum Type {
     SmallTuple         = b')',
     ShortAscii         = b'z',
     ShortAsciiInterned = b'Z',
+    /// Not a real type
+    Bytes              = 0x0,
 }
 impl Type {
     const FLAG_REF: u8 = b'\x80';
@@ -111,19 +115,17 @@ bitflags! {
 #[derive(Clone, Debug)]
 pub struct Code {
     pub argcount:        u32,
-    pub posonlyargcount: u32,
-    pub kwonlyargcount:  u32,
     pub nlocals:         u32,
     pub stacksize:       u32,
     pub flags:           CodeFlags,
     pub code:            Arc<Vec<u8>>,
     pub consts:          Arc<Vec<Obj>>,
-    pub names:           Vec<Arc<Vec<u8>>>,
-    pub varnames:        Vec<Arc<Vec<u8>>>,
-    pub freevars:        Vec<Arc<Vec<u8>>>,
-    pub cellvars:        Vec<Arc<Vec<u8>>>,
-    pub filename:        Arc<Vec<u8>>,
-    pub name:            Arc<Vec<u8>>,
+    pub names:           Vec<Arc<BString>>,
+    pub varnames:        Vec<Arc<BString>>,
+    pub freevars:        Vec<Arc<BString>>,
+    pub cellvars:        Vec<Arc<BString>>,
+    pub filename:        Arc<BString>,
+    pub name:            Arc<BString>,
     pub firstlineno:     u32,
     pub lnotab:          Arc<Vec<u8>>,
 }
@@ -139,7 +141,7 @@ pub enum Obj {
     Float    (f64),
     Complex  (Complex<f64>),
     Bytes    (Arc<Vec<u8>>),
-    String   (Arc<String>),
+    String   (Arc<BString>),
     Tuple    (Arc<Vec<Obj>>),
     List     (ArcRwLock<Vec<Obj>>),
     Dict     (ArcRwLock<HashMap<ObjHashable, Obj>>),
@@ -193,8 +195,8 @@ impl Obj {
     define_extract! { extract_bool          (Bool)          -> bool                                  }
     define_extract! { extract_long          (Long)          -> Arc<BigInt>                           }
     define_extract! { extract_float         (Float)         -> f64                                   }
-    define_extract! { extract_bytes         (Bytes)         -> Arc<Vec<u8>>                          }
-    define_extract! { extract_string        (String)        -> Arc<String>                           }
+    define_extract! { extract_bytes         (String)        -> Arc<BString>                          }
+    define_extract! { extract_string        (String)        -> Arc<BString>                          }
     define_extract! { extract_tuple         (Tuple)         -> Arc<Vec<Self>>                        }
     define_extract! { extract_list          (List)          -> ArcRwLock<Vec<Self>>                  }
     define_extract! { extract_dict          (Dict)          -> ArcRwLock<HashMap<ObjHashable, Self>> }
@@ -241,7 +243,7 @@ impl fmt::Debug for Obj {
             &Self::Float(x) => python_float_repr_full(f, x),
             &Self::Complex(x) => python_complex_repr(f, x),
             Self::Bytes(x) => python_bytes_repr(f, x),
-            Self::String(x) => python_string_repr(f, x),
+            Self::String(x) => python_string_repr(f, x.as_ref().as_ref()),
             Self::Tuple(x) => python_tuple_repr(f, x),
             Self::List(x) => f.debug_list().entries(x.read().unwrap().iter()).finish(),
             Self::Dict(x) => f.debug_map().entries(x.read().unwrap().iter()).finish(),
@@ -251,6 +253,30 @@ impl fmt::Debug for Obj {
         }
     }
 }
+
+impl Obj {
+    pub fn typ(&self) -> Type {
+        match self {
+            Self::None => Type::None,
+            Self::StopIteration => Type::StopIter,
+            Self::Ellipsis => Type::Ellipsis,
+            Self::Bool(true) => Type::True,
+            Self::Bool(false) => Type::False,
+            Self::Long(x) => Type::Long,
+            &Self::Float(x) => Type::Float,
+            &Self::Complex(x) => Type::Complex,
+            Self::Bytes(x) => Type::Bytes,
+            Self::String(x) => Type::String,
+            Self::Tuple(x) => Type::Tuple,
+            Self::List(x) => Type::List,
+            Self::Dict(x) => Type::Dict,
+            Self::Set(x) => Type::Set,
+            Self::FrozenSet(x) => Type::FrozenSet,
+            Self::Code(x) => Type::Code,
+        }
+    }
+}
+
 fn python_float_repr_full(f: &mut fmt::Formatter, x: f64) -> fmt::Result {
     python_float_repr_core(f, x)?;
     if x.fract() == 0. {
@@ -305,7 +331,7 @@ fn python_bytes_repr(f: &mut fmt::Formatter, x: &[u8]) -> fmt::Result {
     write!(f, "\"")?;
     Ok(())
 }
-fn python_string_repr(f: &mut fmt::Formatter, x: &str) -> fmt::Result {
+fn python_string_repr(f: &mut fmt::Formatter, x: &BStr) -> fmt::Result {
     let original = format!("{:?}", x);
     let mut last_end = 0;
     // Note: the behavior is arbitrary if there are improper escapes.
@@ -344,7 +370,7 @@ fn python_frozenset_repr(f: &mut fmt::Formatter, x: &HashSet<ObjHashable>) -> fm
     Ok(())
 }
 fn python_code_repr(f: &mut fmt::Formatter, x: &Code) -> fmt::Result {
-    write!(f, "code(argcount={:?}, posonlyargcount={:?}, kwonlyargcount={:?}, nlocals={:?}, stacksize={:?}, flags={:?}, code={:?}, consts={:?}, names={:?}, varnames={:?}, freevars={:?}, cellvars={:?}, filename={:?}, name={:?}, firstlineno={:?}, lnotab=bytes({:?}))", x.argcount, x.posonlyargcount, x.kwonlyargcount, x.nlocals, x.stacksize, x.flags, Obj::Bytes(Arc::clone(&x.code)), x.consts, x.names, x.varnames, x.freevars, x.cellvars, x.filename, x.name, x.firstlineno, &x.lnotab)
+    write!(f, "code(argcount={:?}, nlocals={:?}, stacksize={:?}, flags={:?}, code={:?}, consts={:?}, names={:?}, varnames={:?}, freevars={:?}, cellvars={:?}, filename={:?}, name={:?}, firstlineno={:?}, lnotab=bytes({:?}))", x.argcount, x.nlocals, x.stacksize, x.flags, Obj::Bytes(Arc::clone(&x.code)), x.consts, x.names, x.varnames, x.freevars, x.cellvars, x.filename, x.name, x.firstlineno, &x.lnotab)
 }
 /// This is a f64 wrapper suitable for use as a key in a (Hash)Map, since NaNs compare equal to
 /// each other, so it can implement Eq and Hash. `HashF64(-0.0) == HashF64(0.0)`.
@@ -417,7 +443,7 @@ pub enum ObjHashable {
     Long(Arc<BigInt>),
     Float(HashF64),
     Complex(Complex<HashF64>),
-    String(Arc<String>),
+    String(Arc<BString>),
     Tuple(Arc<Vec<ObjHashable>>),
     FrozenSet(Arc<HashableHashSet<ObjHashable>>),
     // etc.
@@ -467,7 +493,7 @@ impl fmt::Debug for ObjHashable {
                     im: x.im.0,
                 },
             ),
-            Self::String(x) => python_string_repr(f, x),
+            Self::String(x) => python_string_repr(f, x.as_ref().as_ref()),
             Self::Tuple(x) => python_tuple_hashable_repr(f, x),
             Self::FrozenSet(x) => python_frozenset_repr(f, &x.0),
         }
@@ -488,6 +514,7 @@ fn python_tuple_hashable_repr(f: &mut fmt::Formatter, x: &[ObjHashable]) -> fmt:
 #[cfg(test)]
 mod test {
     use super::{Code, CodeFlags, Obj, ObjHashable};
+    use bstr::{BString, ByteSlice};
     use num_bigint::BigInt;
     use num_complex::Complex;
     use std::{
@@ -563,22 +590,20 @@ mod test {
         );
         assert_eq!(format!("{:?}", Obj::Code(Arc::new(Code {
             argcount: 0,
-            posonlyargcount: 1,
-            kwonlyargcount: 2,
             nlocals: 3,
             stacksize: 4,
             flags: CodeFlags::NESTED | CodeFlags::COROUTINE,
-            code: Arc::new(Vec::from(b"abc" as &[u8])),
+             code: Arc::new(Vec::from(b"abc" as &[u8])),
             consts: Arc::new(vec![Obj::Bool(true)]),
             names: vec![],
-            varnames: vec![Arc::new("a".to_owned())],
-            freevars: vec![Arc::new("b".to_owned()), Arc::new("c".to_owned())],
-            cellvars: vec![Arc::new("de".to_owned())],
-            filename: Arc::new("xyz.py".to_owned()),
-            name: Arc::new("fgh".to_owned()),
+            varnames: vec![Arc::new(BString::from("a"))],
+            freevars: vec![Arc::new(BString::from("b")), Arc::new(BString::from("c"))],
+            cellvars: vec![Arc::new(BString::from("de"))],
+            filename: Arc::new(BString::from("xyz.py")),
+            name: Arc::new(BString::from("fgh")),
             firstlineno: 5,
             lnotab: Arc::new(vec![255, 0, 45, 127, 0, 73]),
-        }))), "code(argcount=0, posonlyargcount=1, kwonlyargcount=2, nlocals=3, stacksize=4, flags=NESTED | COROUTINE, code=b\"abc\", consts=[True], names=[], varnames=[\"a\"], freevars=[\"b\", \"c\"], cellvars=[\"de\"], filename=\"xyz.py\", name=\"fgh\", firstlineno=5, lnotab=bytes([255, 0, 45, 127, 0, 73]))");
+        }))), "code(argcount=0, nlocals=3, stacksize=4, flags=NESTED | COROUTINE, code=b\"abc\", consts=[True], names=[], varnames=[\"a\"], freevars=[\"b\", \"c\"], cellvars=[\"de\"], filename=\"xyz.py\", name=\"fgh\", firstlineno=5, lnotab=bytes([255, 0, 45, 127, 0, 73]))");
     }
 
     #[test]
@@ -654,7 +679,7 @@ mod test {
                             )))),
         "b\"\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\t\\n\\x0b\\x0c\\r\\x0e\\x0f\\x10\\x11\\x12\\x13\\x14\\x15\\x16\\x17\\x18\\x19\\x1a\\x1b\\x1c\\x1d\\x1e\\x1f !\\\"#$%&\\\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\\x7f\\x80\\x81\\x82\\x83\\x84\\x85\\x86\\x87\\x88\\x89\\x8a\\x8b\\x8c\\x8d\\x8e\\x8f\\x90\\x91\\x92\\x93\\x94\\x95\\x96\\x97\\x98\\x99\\x9a\\x9b\\x9c\\x9d\\x9e\\x9f\\xa0\\xa1\\xa2\\xa3\\xa4\\xa5\\xa6\\xa7\\xa8\\xa9\\xaa\\xab\\xac\\xad\\xae\\xaf\\xb0\\xb1\\xb2\\xb3\\xb4\\xb5\\xb6\\xb7\\xb8\\xb9\\xba\\xbb\\xbc\\xbd\\xbe\\xbf\\xc0\\xc1\\xc2\\xc3\\xc4\\xc5\\xc6\\xc7\\xc8\\xc9\\xca\\xcb\\xcc\\xcd\\xce\\xcf\\xd0\\xd1\\xd2\\xd3\\xd4\\xd5\\xd6\\xd7\\xd8\\xd9\\xda\\xdb\\xdc\\xdd\\xde\\xdf\\xe0\\xe1\\xe2\\xe3\\xe4\\xe5\\xe6\\xe7\\xe8\\xe9\\xea\\xeb\\xec\\xed\\xee\\xef\\xf0\\xf1\\xf2\\xf3\\xf4\\xf5\\xf6\\xf7\\xf8\\xf9\\xfa\\xfb\\xfc\\xfd\\xfe\""
         );
-        assert_eq!(format!("{:?}", Obj::String(Arc::new(String::from(
+        assert_eq!(format!("{:?}", Obj::String(Arc::new(BString::from(
                             "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f")))),
                             "\"\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\t\\n\\x0b\\x0c\\r\\x0e\\x0f\\x10\\x11\\x12\\x13\\x14\\x15\\x16\\x17\\x18\\x19\\x1a\\x1b\\x1c\\x1d\\x1e\\x1f !\\\"#$%&\\\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\\x7f\"");
     }
