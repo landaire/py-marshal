@@ -186,7 +186,7 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
     };
     let mut idx: Option<usize> = match type_ {
         // immutable collections
-        Type::SmallTuple | Type::Tuple | Type::FrozenSet | Type::Code if flag => {
+        Type::Tuple | Type::FrozenSet | Type::Code if flag => {
             let i = p.refs.len();
             p.refs.push(Obj::None);
             Some(i)
@@ -229,17 +229,11 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
                 Some(result)
             }
         }
-        Type::AsciiInterned | Type::Ascii | Type::Interned | Type::Unicode => {
+        Type::Interned | Type::Unicode => {
             let obj = Obj::String(Arc::new(r_bstring(r_long(p)? as usize, p)?));
             p.stringrefs.push(obj.clone());
             Some(obj)
         }
-        Type::ShortAsciiInterned | Type::ShortAscii => {
-            let obj = Obj::String(Arc::new(r_bstring(r_byte(p)? as usize, p)?));
-            p.stringrefs.push(obj.clone());
-            Some(obj)
-        }
-        Type::SmallTuple => Some(Obj::Tuple(Arc::new(r_vec(r_byte(p)? as usize, p)?))),
         Type::Tuple => Some(Obj::Tuple(Arc::new(r_vec(r_long(p)? as usize, p)?))),
         Type::List => Some(Obj::List(Arc::new(RwLock::new(r_vec(
             r_long(p)? as usize,
@@ -274,16 +268,6 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
             firstlineno: r_long(p)?,
             lnotab: r_object_extract_bytes(p)?,
         }))),
-
-        Type::Ref => {
-            let n = r_long(p)? as usize;
-            let result = p.refs.get(n).ok_or(ErrorKind::InvalidRef)?.clone();
-            if result.is_none() {
-                return Err(ErrorKind::InvalidRef.into());
-            } else {
-                Some(result)
-            }
-        }
         Type::Unknown => return Err(ErrorKind::InvalidType(Type::Unknown as u8).into()),
     };
     match (&retval, idx) {
