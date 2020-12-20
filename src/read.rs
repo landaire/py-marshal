@@ -217,7 +217,6 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
         })),
         Type::String => {
             let obj = Obj::String(Arc::new(r_bstring(r_long(p)? as usize, p)?));
-            p.stringrefs.push(obj.clone());
             Some(obj)
         }
         Type::StringRef => {
