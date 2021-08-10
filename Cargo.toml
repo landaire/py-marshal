@@ -1,11 +1,11 @@
 [package]
-name = "py-marshal"
+name = "py27-marshal"
 version = "0.3.4"
-authors = ["Solomon Ucko <solly.ucko@gmail.com>"]
+authors = ["Solomon Ucko <solly.ucko@gmail.com>", "Lander Brandt <lander.griffith+cratesio@gmail.com>"]
 edition = "2018"
 description = "A Rust port of https://github.com/python/cpython/blob/master/Python/marshal.c"
 license = "MIT"
-repository = "https://github.com/sollyucko/py-marshal"
+repository = "https://github.com/landaire/py-marshal"
 readme = "README.md"
 categories = ["emulators", "encoding", "parser-implementations", "parsing"]
 keywords = ["python", "marshal", "read", "decode"]
