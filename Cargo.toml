@@ -14,10 +14,10 @@ keywords = ["python", "marshal", "read", "decode"]
 bitflags = "1"
 num-traits = "0.2"
 num-derive = "0.3"
-num-bigint = "0.2"
-num-complex = "0.2"
+num-bigint = "0.4"
+num-complex = "0.4"
 owning_ref = { version = "0.4", optional = true }
-bstr = "0.2"
+bstr = "1.0"
 thiserror = "1.0"
 
 [features]
