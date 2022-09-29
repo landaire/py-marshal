@@ -249,6 +249,34 @@ impl fmt::Debug for Obj {
     }
 }
 
+impl TryFrom<&ObjHashable> for Obj {
+    type Error = ObjHashable;
+
+    fn try_from(orig: &ObjHashable) -> Result<Self, ObjHashable> {
+        match orig {
+            ObjHashable::None => Ok(Self::None),
+            ObjHashable::StopIteration => Ok(Self::StopIteration),
+            ObjHashable::Ellipsis => Ok(Self::Ellipsis),
+            ObjHashable::Bool(x) => Ok(Self::Bool(*x)),
+            ObjHashable::Long(x) => Ok(Self::Long(Arc::clone(x))),
+            ObjHashable::Float(x) => Ok(Self::Float(x.0)),
+            ObjHashable::Complex(Complex { re, im }) => Ok(Self::Complex(Complex {
+                re: re.0,
+                im: im.0,
+            })),
+            ObjHashable::String(x) => Ok(Self::String(Arc::clone(x))),
+            ObjHashable::Tuple(x) => Ok(Self::Tuple(Arc::new(
+                x.iter()
+                    .map(Self::try_from)
+                    .collect::<Result<Vec<Self>, ObjHashable>>()?,
+            ))),
+            ObjHashable::FrozenSet(x) => Ok(Self::FrozenSet(Arc::new(
+                x.0.iter().cloned().collect::<HashSet<ObjHashable>>(),
+            ))),
+        }
+    }
+}
+
 impl Obj {
     pub fn typ(&self) -> Type {
         match self {
