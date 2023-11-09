@@ -215,7 +215,7 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
             re: r_float_bin(p)?,
             im: r_float_bin(p)?,
         })),
-        Type::String => {
+        Type::String | Type::Unicode => {
             let obj = Obj::String(Arc::new(r_bstring(r_long(p)? as usize, p)?));
             Some(obj)
         }
@@ -228,7 +228,7 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
                 Some(result)
             }
         }
-        Type::Interned | Type::Unicode => {
+        Type::Interned => {
             let obj = Obj::String(Arc::new(r_bstring(r_long(p)? as usize, p)?));
             p.stringrefs.push(obj.clone());
             Some(obj)
