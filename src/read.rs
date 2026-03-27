@@ -202,9 +202,9 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
         Type::Ellipsis => Some(Obj::Ellipsis),
         Type::False => Some(Obj::Bool(false)),
         Type::True => Some(Obj::Bool(true)),
-        Type::Int => Some(Obj::Long(Arc::new(BigInt::from(r_long(p)? as i32)))),
-        Type::Int64 => Some(Obj::Long(Arc::new(BigInt::from(r_long64(p)? as i64)))),
-        Type::Long => Some(Obj::Long(Arc::new(r_pylong(p)?))),
+        Type::Int => Some(Obj::Long(Arc::new(RwLock::new(BigInt::from(r_long(p)? as i32))))),
+        Type::Int64 => Some(Obj::Long(Arc::new(RwLock::new(BigInt::from(r_long64(p)? as i64))))),
+        Type::Long => Some(Obj::Long(Arc::new(RwLock::new(r_pylong(p)?)))),
         Type::Float => Some(Obj::Float(r_float_str(p)?)),
         Type::BinaryFloat => Some(Obj::Float(r_float_bin(p)?)),
         Type::Complex => Some(Obj::Complex(Complex {
@@ -216,7 +216,7 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
             im: r_float_bin(p)?,
         })),
         Type::String | Type::Unicode => {
-            let obj = Obj::String(Arc::new(r_bstring(r_long(p)? as usize, p)?));
+            let obj = Obj::String(Arc::new(RwLock::new(r_bstring(r_long(p)? as usize, p)?)));
             Some(obj)
         }
         Type::StringRef => {
@@ -229,11 +229,11 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
             }
         }
         Type::Interned => {
-            let obj = Obj::String(Arc::new(r_bstring(r_long(p)? as usize, p)?));
+            let obj = Obj::String(Arc::new(RwLock::new(r_bstring(r_long(p)? as usize, p)?)));
             p.stringrefs.push(obj.clone());
             Some(obj)
         }
-        Type::Tuple => Some(Obj::Tuple(Arc::new(r_vec(r_long(p)? as usize, p)?))),
+        Type::Tuple => Some(Obj::Tuple(Arc::new(RwLock::new(r_vec(r_long(p)? as usize, p)?)))),
         Type::List => Some(Obj::List(Arc::new(RwLock::new(r_vec(
             r_long(p)? as usize,
             p,
@@ -249,9 +249,9 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
             r_hashset_into(&mut *set.write().unwrap(), r_long(p)? as usize, p)?;
             Some(Obj::Set(set))
         }
-        Type::FrozenSet => Some(Obj::FrozenSet(Arc::new(r_hashset(r_long(p)? as usize, p)?))),
+        Type::FrozenSet => Some(Obj::FrozenSet(Arc::new(RwLock::new(r_hashset(r_long(p)? as usize, p)?)))),
         Type::Dict => Some(Obj::Dict(Arc::new(RwLock::new(r_hashmap(p)?)))),
-        Type::Code => Some(Obj::Code(Arc::new(Code {
+        Type::Code => Some(Obj::Code(Arc::new(RwLock::new(Code {
             argcount: r_long(p)?,
             nlocals: r_long(p)?,
             stacksize: r_long(p)?,
@@ -266,7 +266,7 @@ fn r_object(p: &mut RFile<impl Read>) -> ParseResult<Option<Obj>> {
             name: r_object_extract_string(p)?,
             firstlineno: r_long(p)?,
             lnotab: r_object_extract_bytes(p)?,
-        }))),
+        })))),
         Type::Unknown => return Err(ErrorKind::InvalidType(Type::Unknown as u8).into()),
     };
     match (&retval, idx) {
@@ -290,26 +290,43 @@ fn r_object_not_null(p: &mut RFile<impl Read>) -> ParseResult<Obj> {
     Ok(r_object(p)?.ok_or(ErrorKind::IsNull)?)
 }
 fn r_object_extract_string(p: &mut RFile<impl Read>) -> ParseResult<Arc<BString>> {
-    Ok(r_object_not_null(p)?
+    let mutex_val = r_object_not_null(p)?
         .extract_string()
-        .map_err(ErrorKind::TypeError)?)
+        .map_err(ErrorKind::TypeError)?;
+    let guard = mutex_val.read().unwrap();
+    let result = Arc::new(guard.clone());
+    drop(guard);
+    Ok(result)
 }
 fn r_object_extract_bytes(p: &mut RFile<impl Read>) -> ParseResult<Arc<Vec<u8>>> {
-    Ok(r_object_not_null(p)?
+    let mutex_val = r_object_not_null(p)?
         .extract_string()
-        .map_err(ErrorKind::TypeError)?)
+        .map_err(ErrorKind::TypeError)?;
     // this forces an allocation but makes some operations easier
-    .map(|bytes| Arc::new(bytes.to_vec()))
+    let guard = mutex_val.read().unwrap();
+    let result = Arc::new(guard.to_vec());
+    drop(guard);
+    Ok(result)
 }
 fn r_object_extract_tuple(p: &mut RFile<impl Read>) -> ParseResult<Arc<Vec<Obj>>> {
-    Ok(r_object_not_null(p)?
+    let mutex_val = r_object_not_null(p)?
         .extract_tuple()
-        .map_err(ErrorKind::TypeError)?)
+        .map_err(ErrorKind::TypeError)?;
+    let guard = mutex_val.read().unwrap();
+    let result = Arc::new(guard.clone());
+    drop(guard);
+    Ok(result)
 }
 fn r_object_extract_tuple_string(p: &mut RFile<impl Read>) -> ParseResult<Vec<Arc<BString>>> {
     Ok(r_object_extract_tuple(p)?
         .iter()
-        .map(|x| x.clone().extract_string().map_err(ErrorKind::TypeError))
+        .map(|x| {
+            let mutex_val = x.clone().extract_string().map_err(ErrorKind::TypeError)?;
+            let guard = mutex_val.read().unwrap();
+            let result = Arc::new(guard.clone());
+            drop(guard);
+            Ok(result)
+        })
         .collect::<ParseResult<Vec<Arc<BString>>>>()?)
 }
 
@@ -391,7 +408,7 @@ mod test {
 
     #[test]
     fn test_ints() {
-        assert_eq!(BigInt::parse_bytes(b"85070591730234615847396907784232501249", 10).unwrap(), *loads_unwrap(b"l\t\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\xf0\x7f\xff\x7f\xff\x7f\xff\x7f?\x00").extract_long().unwrap());
+        assert_eq!(BigInt::parse_bytes(b"85070591730234615847396907784232501249", 10).unwrap(), *loads_unwrap(b"l\t\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\xf0\x7f\xff\x7f\xff\x7f\xff\x7f?\x00").extract_long().unwrap().read().unwrap());
     }
 
     #[allow(clippy::unreadable_literal)]
@@ -407,7 +424,7 @@ mod test {
                 s.extend_from_slice(&base.to_le_bytes());
                 assert_eq!(
                     BigInt::from(base),
-                    *loads_unwrap(&s).extract_long().unwrap()
+                    *loads_unwrap(&s).extract_long().unwrap().read().unwrap()
                 );
 
                 if base == -1 {
@@ -423,11 +440,15 @@ mod test {
             *loads_unwrap(b"I\xfe\xdc\xba\x98\x76\x54\x32\x10")
                 .extract_long()
                 .unwrap()
+                .read()
+                .unwrap()
         );
         assert_eq!(
             BigInt::from(-0x1032547698badcff_i64),
             *loads_unwrap(b"I\x01\x23\x45\x67\x89\xab\xcd\xef")
                 .extract_long()
+                .unwrap()
+                .read()
                 .unwrap()
         );
         assert_eq!(
@@ -435,11 +456,15 @@ mod test {
             *loads_unwrap(b"I\x08\x19\x2a\x3b\x4c\x5d\x6e\x7f")
                 .extract_long()
                 .unwrap()
+                .read()
+                .unwrap()
         );
         assert_eq!(
             BigInt::from(-0x7f6e5d4c3b2a1909_i64),
             *loads_unwrap(b"I\xf7\xe6\xd5\xc4\xb3\xa2\x91\x80")
                 .extract_long()
+                .unwrap()
+                .read()
                 .unwrap()
         );
     }
@@ -463,72 +488,64 @@ mod test {
 
     #[test]
     fn test_unicode() {
-        assert_eq!("", *loads_unwrap(b"\xda\x00").extract_string().unwrap());
+        assert_eq!("", *loads_unwrap(b"\xda\x00").extract_string().unwrap().read().unwrap());
         assert_eq!(
             "Andr\u{e8} Previn",
             *loads_unwrap(b"u\r\x00\x00\x00Andr\xc3\xa8 Previn")
                 .extract_string()
                 .unwrap()
+                .read()
+                .unwrap()
         );
         assert_eq!(
             "abc",
-            *loads_unwrap(b"\xda\x03abc").extract_string().unwrap()
+            *loads_unwrap(b"\xda\x03abc").extract_string().unwrap().read().unwrap()
         );
         assert_eq!(
             " ".repeat(10_000),
             *loads_unwrap(&[b"a\x10'\x00\x00" as &[u8], &[b' '; 10_000]].concat())
                 .extract_string()
                 .unwrap()
+                .read()
+                .unwrap()
         );
     }
 
     #[test]
     fn test_string() {
-        assert_eq!("", *loads_unwrap(b"\xda\x00").extract_string().unwrap());
+        assert_eq!("", *loads_unwrap(b"\xda\x00").extract_string().unwrap().read().unwrap());
         assert_eq!(
             "Andr\u{e8} Previn",
             *loads_unwrap(b"\xf5\r\x00\x00\x00Andr\xc3\xa8 Previn")
                 .extract_string()
                 .unwrap()
+                .read()
+                .unwrap()
         );
         assert_eq!(
             "abc",
-            *loads_unwrap(b"\xda\x03abc").extract_string().unwrap()
+            *loads_unwrap(b"\xda\x03abc").extract_string().unwrap().read().unwrap()
         );
         assert_eq!(
             " ".repeat(10_000),
             *loads_unwrap(&[b"\xe1\x10'\x00\x00" as &[u8], &[b' '; 10_000]].concat())
                 .extract_string()
                 .unwrap()
+                .read()
+                .unwrap()
         );
     }
 
     #[test]
     fn test_bytes() {
-        assert_eq!(
-            b"",
-            &loads_unwrap(b"\xf3\x00\x00\x00\x00")
-                .extract_bytes()
-                .unwrap()[..]
-        );
-        assert_eq!(
-            b"Andr\xe8 Previn",
-            &loads_unwrap(b"\xf3\x0c\x00\x00\x00Andr\xe8 Previn")
-                .extract_bytes()
-                .unwrap()[..]
-        );
-        assert_eq!(
-            b"abc",
-            &loads_unwrap(b"\xf3\x03\x00\x00\x00abc")
-                .extract_bytes()
-                .unwrap()[..]
-        );
-        assert_eq!(
-            b" ".repeat(10_000),
-            &loads_unwrap(&[b"\xf3\x10'\x00\x00" as &[u8], &[b' '; 10_000]].concat())
-                .extract_bytes()
-                .unwrap()[..]
-        );
+        let b1 = loads_unwrap(b"\xf3\x00\x00\x00\x00").extract_bytes().unwrap();
+        assert_eq!(b"", &b1.read().unwrap()[..]);
+        let b2 = loads_unwrap(b"\xf3\x0c\x00\x00\x00Andr\xe8 Previn").extract_bytes().unwrap();
+        assert_eq!(b"Andr\xe8 Previn", &b2.read().unwrap()[..]);
+        let b3 = loads_unwrap(b"\xf3\x03\x00\x00\x00abc").extract_bytes().unwrap();
+        assert_eq!(b"abc", &b3.read().unwrap()[..]);
+        let b4 = loads_unwrap(&[b"\xf3\x10'\x00\x00" as &[u8], &[b' '; 10_000]].concat()).extract_bytes().unwrap();
+        assert_eq!(b" ".repeat(10_000), &b4.read().unwrap()[..]);
     }
 
     #[test]
@@ -581,7 +598,8 @@ mod test {
             },
         );
         println!("{}", input.len());
-        let code = code_result.unwrap().extract_code().unwrap();
+        let binding = code_result.unwrap().extract_code().unwrap();
+        let code = binding.read().unwrap();
         assert_test_exceptions_code_valid(&code);
     }
 
@@ -594,9 +612,11 @@ mod test {
                 has_posonlyargcount: false,
             },
         );
-        let tuple = result.unwrap().extract_tuple().unwrap();
+        let binding = result.unwrap().extract_tuple().unwrap();
+        let tuple = binding.read().unwrap();
         for o in &*tuple {
-            assert_test_exceptions_code_valid(&o.clone().extract_code().unwrap());
+            let code_binding = o.clone().extract_code().unwrap();
+            assert_test_exceptions_code_valid(&code_binding.read().unwrap());
         }
     }
 
@@ -611,10 +631,11 @@ mod test {
             },
         );
         println!("{}", input.len());
-        let tuple = result.unwrap().extract_tuple().unwrap();
+        let binding = result.unwrap().extract_tuple().unwrap();
+        let tuple = binding.read().unwrap();
         assert_eq!(tuple.len(), 2);
-        assert_eq!(*tuple[0].clone().extract_code().unwrap().filename, "f1");
-        assert_eq!(*tuple[1].clone().extract_code().unwrap().filename, "f2");
+        assert_eq!(*tuple[0].clone().extract_code().unwrap().read().unwrap().filename, "f1");
+        assert_eq!(*tuple[1].clone().extract_code().unwrap().read().unwrap().filename, "f2");
     }
 
     #[allow(clippy::float_cmp)]
@@ -631,6 +652,8 @@ mod test {
             *dict[&ObjHashable::String(Arc::new(BString::from("astring")))]
                 .clone()
                 .extract_string()
+                .unwrap()
+                .read()
                 .unwrap(),
             "foo@bar.baz.spam"
         );
@@ -645,6 +668,8 @@ mod test {
             *dict[&ObjHashable::String(Arc::new(BString::from("anint")))]
                 .clone()
                 .extract_long()
+                .unwrap()
+                .read()
                 .unwrap(),
             BigInt::from(2).pow(20_u8)
         );
@@ -652,6 +677,8 @@ mod test {
             *dict[&ObjHashable::String(Arc::new(BString::from("ashortlong")))]
                 .clone()
                 .extract_long()
+                .unwrap()
+                .read()
                 .unwrap(),
             BigInt::from(2)
         );
@@ -662,15 +689,16 @@ mod test {
             .unwrap();
         let list = list_ref.try_read().unwrap();
         assert_eq!(list.len(), 1);
-        assert_eq!(*list[0].clone().extract_string().unwrap(), ".zyx.41");
+        assert_eq!(*list[0].clone().extract_string().unwrap().read().unwrap(), ".zyx.41");
 
-        let tuple = dict[&ObjHashable::String(Arc::new(BString::from("atuple")))]
+        let tuple_binding = dict[&ObjHashable::String(Arc::new(BString::from("atuple")))]
             .clone()
             .extract_tuple()
             .unwrap();
+        let tuple = tuple_binding.read().unwrap();
         assert_eq!(tuple.len(), 10);
         for o in &*tuple {
-            assert_eq!(*o.clone().extract_string().unwrap(), ".zyx.41");
+            assert_eq!(*o.clone().extract_string().unwrap().read().unwrap(), ".zyx.41");
         }
         assert_eq!(
             dict[&ObjHashable::String(Arc::new(BString::from("aboolean")))]
@@ -683,6 +711,8 @@ mod test {
             *dict[&ObjHashable::String(Arc::new(BString::from("aunicode")))]
                 .clone()
                 .extract_string()
+                .unwrap()
+                .read()
                 .unwrap(),
             "Andr\u{e8} Previn"
         );
@@ -702,6 +732,8 @@ mod test {
             ]))]
                 .clone()
                 .extract_string()
+                .unwrap()
+                .read()
                 .unwrap(),
             "c"
         );
@@ -713,7 +745,8 @@ mod test {
     fn test_sets() {
         let set = loads_unwrap(b"<\x08\x00\x00\x00\xda\x05alist\xda\x08aboolean\xda\x07astring\xda\x08aunicode\xda\x06afloat\xda\x05anint\xda\x06atuple\xda\nashortlong").extract_set().unwrap();
         assert_eq!(set.read().unwrap().len(), 8);
-        let frozenset = loads_unwrap(b">\x08\x00\x00\x00\xda\x06atuple\xda\x08aunicode\xda\x05anint\xda\x08aboolean\xda\x06afloat\xda\x05alist\xda\nashortlong\xda\x07astring").extract_frozenset().unwrap();
+        let frozenset_binding = loads_unwrap(b">\x08\x00\x00\x00\xda\x06atuple\xda\x08aunicode\xda\x05anint\xda\x08aboolean\xda\x06afloat\xda\x05alist\xda\nashortlong\xda\x07astring").extract_frozenset().unwrap();
+        let frozenset = frozenset_binding.read().unwrap();
         assert_eq!(frozenset.len(), 8);
         // TODO: check values
     }

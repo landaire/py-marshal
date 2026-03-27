@@ -17,8 +17,6 @@ use std::{
 pub mod read;
 //pub mod write;
 
-/// `Arc` = immutable
-/// `ArcRwLock` = mutable
 pub type ArcRwLock<T> = Arc<RwLock<T>>;
 
 #[derive(FromPrimitive, ToPrimitive, Debug, Copy, Clone)]
@@ -126,31 +124,56 @@ pub struct Code {
 }
 
 #[rustfmt::skip]
-#[derive(Clone)]
+#[rustfmt::skip]
 pub enum Obj {
     None,
     StopIteration,
     Ellipsis,
     Bool     (bool),
-    Long     (Arc<BigInt>),
+    Long     (ArcRwLock<BigInt>),
     Float    (f64),
     Complex  (Complex<f64>),
-    Bytes    (Arc<Vec<u8>>),
-    String   (Arc<BString>),
-    Tuple    (Arc<Vec<Obj>>),
+    Bytes    (ArcRwLock<Vec<u8>>),
+    String   (ArcRwLock<BString>),
+    Tuple    (ArcRwLock<Vec<Obj>>),
     List     (ArcRwLock<Vec<Obj>>),
     Dict     (ArcRwLock<HashMap<ObjHashable, Obj>>),
     Set      (ArcRwLock<HashSet<ObjHashable>>),
-    FrozenSet(Arc<HashSet<ObjHashable>>),
-    Code     (Arc<Code>),
+    FrozenSet(ArcRwLock<HashSet<ObjHashable>>),
+    Code     (ArcRwLock<Code>),
     // etc.
 }
+impl Clone for Obj {
+    fn clone(&self) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::StopIteration => Self::StopIteration,
+            Self::Ellipsis => Self::Ellipsis,
+            Self::Bool(x) => Self::Bool(*x),
+            Self::Long(x) => Self::Long(Arc::new(RwLock::new(x.read().unwrap().clone()))),
+            Self::Float(x) => Self::Float(*x),
+            Self::Complex(x) => Self::Complex(*x),
+            Self::Bytes(x) => Self::Bytes(Arc::new(RwLock::new(x.read().unwrap().clone()))),
+            Self::String(x) => Self::String(Arc::new(RwLock::new(x.read().unwrap().clone()))),
+            Self::Tuple(x) => Self::Tuple(Arc::new(RwLock::new(x.read().unwrap().clone()))),
+            Self::List(x) => Self::List(Arc::clone(x)),
+            Self::Dict(x) => Self::Dict(Arc::clone(x)),
+            Self::Set(x) => Self::Set(Arc::clone(x)),
+            Self::FrozenSet(x) => Self::FrozenSet(Arc::new(RwLock::new(x.read().unwrap().clone()))),
+            Self::Code(x) => Self::Code(Arc::new(RwLock::new(x.read().unwrap().clone()))),
+        }
+    }
+}
+
 macro_rules! define_extract {
     ($extract_fn:ident($variant:ident) -> ()) => {
         define_extract! { $extract_fn -> () { $variant => () } }
     };
     ($extract_fn:ident($variant:ident) -> Arc<$ret:ty>) => {
         define_extract! { $extract_fn -> Arc<$ret> { $variant(x) => x } }
+    };
+    ($extract_fn:ident($variant:ident) -> ArcRwLock<$ret:ty>) => {
+        define_extract! { $extract_fn -> ArcRwLock<$ret> { $variant(x) => x } }
     };
     ($extract_fn:ident($variant:ident) -> ArcRwLock<$ret:ty>) => {
         define_extract! { $extract_fn -> ArcRwLock<$ret> { $variant(x) => x } }
@@ -188,16 +211,16 @@ impl Obj {
     define_extract! { extract_none          (None)          -> ()                                    }
     define_extract! { extract_stop_iteration(StopIteration) -> ()                                    }
     define_extract! { extract_bool          (Bool)          -> bool                                  }
-    define_extract! { extract_long          (Long)          -> Arc<BigInt>                           }
+    define_extract! { extract_long          (Long)          -> ArcRwLock<BigInt>                      }
     define_extract! { extract_float         (Float)         -> f64                                   }
-    define_extract! { extract_bytes         (String)        -> Arc<BString>                          }
-    define_extract! { extract_string        (String)        -> Arc<BString>                          }
-    define_extract! { extract_tuple         (Tuple)         -> Arc<Vec<Self>>                        }
+    define_extract! { extract_bytes         (String)        -> ArcRwLock<BString>                     }
+    define_extract! { extract_string        (String)        -> ArcRwLock<BString>                     }
+    define_extract! { extract_tuple         (Tuple)         -> ArcRwLock<Vec<Self>>                   }
     define_extract! { extract_list          (List)          -> ArcRwLock<Vec<Self>>                  }
     define_extract! { extract_dict          (Dict)          -> ArcRwLock<HashMap<ObjHashable, Self>> }
     define_extract! { extract_set           (Set)           -> ArcRwLock<HashSet<ObjHashable>>       }
-    define_extract! { extract_frozenset     (FrozenSet)     -> Arc<HashSet<ObjHashable>>             }
-    define_extract! { extract_code          (Code)          -> Arc<Code>                             }
+    define_extract! { extract_frozenset     (FrozenSet)     -> ArcRwLock<HashSet<ObjHashable>>        }
+    define_extract! { extract_code          (Code)          -> ArcRwLock<Code>                        }
 
     define_is! { is_none          (None)          }
     define_is! { is_stop_iteration(StopIteration) }
@@ -234,17 +257,17 @@ impl fmt::Debug for Obj {
             Self::Ellipsis => write!(f, "Ellipsis"),
             Self::Bool(true) => write!(f, "True"),
             Self::Bool(false) => write!(f, "False"),
-            Self::Long(x) => write!(f, "{}", x),
+            Self::Long(x) => write!(f, "{}", x.read().unwrap()),
             &Self::Float(x) => python_float_repr_full(f, x),
             &Self::Complex(x) => python_complex_repr(f, x),
-            Self::Bytes(x) => python_bytes_repr(f, x),
-            Self::String(x) => python_string_repr(f, x.as_ref().as_ref()),
-            Self::Tuple(x) => python_tuple_repr(f, x),
+            Self::Bytes(x) => python_bytes_repr(f, &x.read().unwrap()),
+            Self::String(x) => python_string_repr(f, x.read().unwrap().as_ref()),
+            Self::Tuple(x) => python_tuple_repr(f, &x.read().unwrap()),
             Self::List(x) => f.debug_list().entries(x.read().unwrap().iter()).finish(),
             Self::Dict(x) => f.debug_map().entries(x.read().unwrap().iter()).finish(),
             Self::Set(x) => f.debug_set().entries(x.read().unwrap().iter()).finish(),
-            Self::FrozenSet(x) => python_frozenset_repr(f, x),
-            Self::Code(x) => python_code_repr(f, x),
+            Self::FrozenSet(x) => python_frozenset_repr(f, &x.read().unwrap()),
+            Self::Code(x) => python_code_repr(f, &x.read().unwrap()),
         }
     }
 }
@@ -258,21 +281,21 @@ impl TryFrom<&ObjHashable> for Obj {
             ObjHashable::StopIteration => Ok(Self::StopIteration),
             ObjHashable::Ellipsis => Ok(Self::Ellipsis),
             ObjHashable::Bool(x) => Ok(Self::Bool(*x)),
-            ObjHashable::Long(x) => Ok(Self::Long(Arc::clone(x))),
+            ObjHashable::Long(x) => Ok(Self::Long(Arc::new(RwLock::new(x.as_ref().clone())))),
             ObjHashable::Float(x) => Ok(Self::Float(x.0)),
             ObjHashable::Complex(Complex { re, im }) => Ok(Self::Complex(Complex {
                 re: re.0,
                 im: im.0,
             })),
-            ObjHashable::String(x) => Ok(Self::String(Arc::clone(x))),
-            ObjHashable::Tuple(x) => Ok(Self::Tuple(Arc::new(
+            ObjHashable::String(x) => Ok(Self::String(Arc::new(RwLock::new(x.as_ref().clone())))),
+            ObjHashable::Tuple(x) => Ok(Self::Tuple(Arc::new(RwLock::new(
                 x.iter()
                     .map(Self::try_from)
                     .collect::<Result<Vec<Self>, ObjHashable>>()?,
-            ))),
-            ObjHashable::FrozenSet(x) => Ok(Self::FrozenSet(Arc::new(
+            )))),
+            ObjHashable::FrozenSet(x) => Ok(Self::FrozenSet(Arc::new(RwLock::new(
                 x.0.iter().cloned().collect::<HashSet<ObjHashable>>(),
-            ))),
+            )))),
         }
     }
 }
@@ -393,7 +416,7 @@ fn python_frozenset_repr(f: &mut fmt::Formatter, x: &HashSet<ObjHashable>) -> fm
     Ok(())
 }
 fn python_code_repr(f: &mut fmt::Formatter, x: &Code) -> fmt::Result {
-    write!(f, "code(argcount={:?}, nlocals={:?}, stacksize={:?}, flags={:?}, code={:?}, consts={:?}, names={:?}, varnames={:?}, freevars={:?}, cellvars={:?}, filename={:?}, name={:?}, firstlineno={:?}, lnotab=bytes({:?}))", x.argcount, x.nlocals, x.stacksize, x.flags, Obj::Bytes(Arc::clone(&x.code)), x.consts, x.names, x.varnames, x.freevars, x.cellvars, x.filename, x.name, x.firstlineno, &x.lnotab)
+    write!(f, "code(argcount={:?}, nlocals={:?}, stacksize={:?}, flags={:?}, code={:?}, consts={:?}, names={:?}, varnames={:?}, freevars={:?}, cellvars={:?}, filename={:?}, name={:?}, firstlineno={:?}, lnotab=bytes({:?}))", x.argcount, x.nlocals, x.stacksize, x.flags, Obj::Bytes(Arc::new(RwLock::new(x.code.as_ref().clone()))), x.consts, x.names, x.varnames, x.freevars, x.cellvars, x.filename, x.name, x.firstlineno, &x.lnotab)
 }
 /// This is a f64 wrapper suitable for use as a key in a (Hash)Map, since NaNs compare equal to
 /// each other, so it can implement Eq and Hash. `HashF64(-0.0) == HashF64(0.0)`.
@@ -480,20 +503,20 @@ impl TryFrom<&Obj> for ObjHashable {
             Obj::StopIteration => Ok(Self::StopIteration),
             Obj::Ellipsis => Ok(Self::Ellipsis),
             Obj::Bool(x) => Ok(Self::Bool(*x)),
-            Obj::Long(x) => Ok(Self::Long(Arc::clone(x))),
+            Obj::Long(x) => Ok(Self::Long(Arc::new(x.read().unwrap().clone()))),
             Obj::Float(x) => Ok(Self::Float(HashF64(*x))),
             Obj::Complex(Complex { re, im }) => Ok(Self::Complex(Complex {
                 re: HashF64(*re),
                 im: HashF64(*im),
             })),
-            Obj::String(x) => Ok(Self::String(Arc::clone(x))),
+            Obj::String(x) => Ok(Self::String(Arc::new(x.read().unwrap().clone()))),
             Obj::Tuple(x) => Ok(Self::Tuple(Arc::new(
-                x.iter()
+                x.read().unwrap().iter()
                     .map(Self::try_from)
                     .collect::<Result<Vec<Self>, Obj>>()?,
             ))),
             Obj::FrozenSet(x) => Ok(Self::FrozenSet(Arc::new(
-                x.iter().cloned().collect::<HashableHashSet<Self>>(),
+                x.read().unwrap().iter().cloned().collect::<HashableHashSet<Self>>(),
             ))),
             x => Err(x.clone()),
         }
@@ -553,18 +576,18 @@ mod test {
         assert_eq!(format!("{:?}", Obj::Bool(true)), "True");
         assert_eq!(format!("{:?}", Obj::Bool(false)), "False");
         assert_eq!(
-            format!("{:?}", Obj::Long(Arc::new(BigInt::from(-123)))),
+            format!("{:?}", Obj::Long(Arc::new(RwLock::new(BigInt::from(-123))))),
             "-123"
         );
-        assert_eq!(format!("{:?}", Obj::Tuple(Arc::new(vec![]))), "()");
+        assert_eq!(format!("{:?}", Obj::Tuple(Arc::new(RwLock::new(vec![])))), "()");
         assert_eq!(
-            format!("{:?}", Obj::Tuple(Arc::new(vec![Obj::Bool(true)]))),
+            format!("{:?}", Obj::Tuple(Arc::new(RwLock::new(vec![Obj::Bool(true)])))),
             "(True,)"
         );
         assert_eq!(
             format!(
                 "{:?}",
-                Obj::Tuple(Arc::new(vec![Obj::Bool(true), Obj::None]))
+                Obj::Tuple(Arc::new(RwLock::new(vec![Obj::Bool(true), Obj::None])))
             ),
             "(True, None)"
         );
@@ -581,7 +604,7 @@ mod test {
                 Obj::Dict(Arc::new(RwLock::new(
                     vec![(
                         ObjHashable::Bool(true),
-                        Obj::Bytes(Arc::new(Vec::from(b"a" as &[u8])))
+                        Obj::Bytes(Arc::new(RwLock::new(Vec::from(b"a" as &[u8]))))
                     )]
                     .into_iter()
                     .collect::<HashMap<_, _>>()
@@ -603,15 +626,15 @@ mod test {
         assert_eq!(
             format!(
                 "{:?}",
-                Obj::FrozenSet(Arc::new(
+                Obj::FrozenSet(Arc::new(RwLock::new(
                     vec![ObjHashable::Bool(true)]
                         .into_iter()
                         .collect::<HashSet<_>>()
-                ))
+                )))
             ),
             "frozenset({True})"
         );
-        assert_eq!(format!("{:?}", Obj::Code(Arc::new(Code {
+        assert_eq!(format!("{:?}", Obj::Code(Arc::new(RwLock::new(Code {
             argcount: 0,
             nlocals: 3,
             stacksize: 4,
@@ -626,7 +649,7 @@ mod test {
             name: Arc::new(BString::from("fgh")),
             firstlineno: 5,
             lnotab: Arc::new(vec![255, 0, 45, 127, 0, 73]),
-        }))), "code(argcount=0, nlocals=3, stacksize=4, flags=NESTED | COROUTINE, code=b\"abc\", consts=[True], names=[], varnames=[\"a\"], freevars=[\"b\", \"c\"], cellvars=[\"de\"], filename=\"xyz.py\", name=\"fgh\", firstlineno=5, lnotab=bytes([255, 0, 45, 127, 0, 73]))");
+        })))), "code(argcount=0, nlocals=3, stacksize=4, flags=NESTED | COROUTINE, code=b\"abc\", consts=[True], names=[], varnames=[\"a\"], freevars=[\"b\", \"c\"], cellvars=[\"de\"], filename=\"xyz.py\", name=\"fgh\", firstlineno=5, lnotab=bytes([255, 0, 45, 127, 0, 73]))");
     }
 
     #[test]
@@ -697,13 +720,13 @@ mod test {
 
     #[test]
     fn test_bytes_string_debug_repr() {
-        assert_eq!(format!("{:?}", Obj::Bytes(Arc::new(Vec::from(
+        assert_eq!(format!("{:?}", Obj::Bytes(Arc::new(RwLock::new(Vec::from(
                             b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe" as &[u8]
-                            )))),
+                            ))))),
         "b\"\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\t\\n\\x0b\\x0c\\r\\x0e\\x0f\\x10\\x11\\x12\\x13\\x14\\x15\\x16\\x17\\x18\\x19\\x1a\\x1b\\x1c\\x1d\\x1e\\x1f !\\\"#$%&\\\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\\x7f\\x80\\x81\\x82\\x83\\x84\\x85\\x86\\x87\\x88\\x89\\x8a\\x8b\\x8c\\x8d\\x8e\\x8f\\x90\\x91\\x92\\x93\\x94\\x95\\x96\\x97\\x98\\x99\\x9a\\x9b\\x9c\\x9d\\x9e\\x9f\\xa0\\xa1\\xa2\\xa3\\xa4\\xa5\\xa6\\xa7\\xa8\\xa9\\xaa\\xab\\xac\\xad\\xae\\xaf\\xb0\\xb1\\xb2\\xb3\\xb4\\xb5\\xb6\\xb7\\xb8\\xb9\\xba\\xbb\\xbc\\xbd\\xbe\\xbf\\xc0\\xc1\\xc2\\xc3\\xc4\\xc5\\xc6\\xc7\\xc8\\xc9\\xca\\xcb\\xcc\\xcd\\xce\\xcf\\xd0\\xd1\\xd2\\xd3\\xd4\\xd5\\xd6\\xd7\\xd8\\xd9\\xda\\xdb\\xdc\\xdd\\xde\\xdf\\xe0\\xe1\\xe2\\xe3\\xe4\\xe5\\xe6\\xe7\\xe8\\xe9\\xea\\xeb\\xec\\xed\\xee\\xef\\xf0\\xf1\\xf2\\xf3\\xf4\\xf5\\xf6\\xf7\\xf8\\xf9\\xfa\\xfb\\xfc\\xfd\\xfe\""
         );
-        assert_eq!(format!("{:?}", Obj::String(Arc::new(BString::from(
-                            "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f")))),
+        assert_eq!(format!("{:?}", Obj::String(Arc::new(RwLock::new(BString::from(
+                            "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f"))))),
                             "\"\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\t\\n\\x0b\\x0c\\r\\x0e\\x0f\\x10\\x11\\x12\\x13\\x14\\x15\\x16\\x17\\x18\\x19\\x1a\\x1b\\x1c\\x1d\\x1e\\x1f !\\\"#$%&\\\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\\x7f\"");
     }
 }
