@@ -15,7 +15,7 @@ use std::{
 };
 
 pub mod read;
-//pub mod write;
+pub mod write;
 
 pub type ArcRwLock<T> = Arc<RwLock<T>>;
 
