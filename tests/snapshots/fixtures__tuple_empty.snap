@@ -1,0 +1,6 @@
+---
+source: tests/fixtures.rs
+assertion_line: 32
+expression: obj
+---
+()

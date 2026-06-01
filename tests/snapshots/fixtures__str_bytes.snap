@@ -1,0 +1,6 @@
+---
+source: tests/fixtures.rs
+assertion_line: 28
+expression: obj
+---
+"Andr\xe8 Previn"

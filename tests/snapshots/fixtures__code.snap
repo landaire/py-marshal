@@ -1,0 +1,6 @@
+---
+source: tests/fixtures.rs
+assertion_line: 35
+expression: obj
+---
+code(argcount=0, nlocals=0, stacksize=1, flags=NOFREE, code=b"d\x00\x00Z\x00\x00e\x00\x00GHd\x01\x00S", consts=[1, None], names=["x"], varnames=[], freevars=[], cellvars=[], filename="<fixture>", name="<module>", firstlineno=1, lnotab=bytes([6, 1]))

@@ -1,0 +1,10 @@
+---
+source: tests/fixtures.rs
+assertion_line: 31
+expression: obj
+---
+(
+    1,
+    2,
+    "abc",
+)

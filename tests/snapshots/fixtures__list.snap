@@ -1,0 +1,10 @@
+---
+source: tests/fixtures.rs
+assertion_line: 33
+expression: obj
+---
+[
+    True,
+    None,
+    3,
+]

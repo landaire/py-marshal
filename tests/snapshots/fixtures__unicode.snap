@@ -1,0 +1,6 @@
+---
+source: tests/fixtures.rs
+assertion_line: 29
+expression: obj
+---
+"Andrè Previn"
