@@ -7,10 +7,8 @@ use num_complex::Complex;
 use num_derive::{FromPrimitive, ToPrimitive};
 use std::{
     collections::{HashMap, HashSet},
-    convert::TryFrom,
     fmt,
     hash::{Hash, Hasher},
-    iter::FromIterator,
     sync::{Arc, RwLock},
 };
 
@@ -22,32 +20,32 @@ pub type ArcRwLock<T> = Arc<RwLock<T>>;
 #[derive(FromPrimitive, ToPrimitive, Debug, Copy, Clone)]
 #[repr(u8)]
 pub enum Type {
-    Null          = b'0',
-    None          = b'N',
-    False         = b'F',
-    True          = b'T',
-    StopIter      = b'S',
-    Ellipsis      = b'.',
-    Int           = b'i',
-    Int64         = b'I',
-    Float         = b'f',
-    BinaryFloat   = b'g',
-    Complex       = b'x',
+    Null = b'0',
+    None = b'N',
+    False = b'F',
+    True = b'T',
+    StopIter = b'S',
+    Ellipsis = b'.',
+    Int = b'i',
+    Int64 = b'I',
+    Float = b'f',
+    BinaryFloat = b'g',
+    Complex = b'x',
     BinaryComplex = b'y',
-    Long          = b'l',
-    String        = b's',
-    Interned      = b't',
-    StringRef     = b'R',
-    Tuple         = b'(',
-    List          = b'[',
-    Dict          = b'{',
-    Code          = b'c',
-    Unicode       = b'u',
-    Unknown       = b'?',
-    Set           = b'<',
-    FrozenSet     = b'>',
+    Long = b'l',
+    String = b's',
+    Interned = b't',
+    StringRef = b'R',
+    Tuple = b'(',
+    List = b'[',
+    Dict = b'{',
+    Code = b'c',
+    Unicode = b'u',
+    Unknown = b'?',
+    Set = b'<',
+    FrozenSet = b'>',
     /// Not a real type
-    Bytes         = 0x0,
+    Bytes = 0x0,
 }
 impl Type {
     const FLAG_REF: u8 = b'\x80';
@@ -63,22 +61,17 @@ impl Depth {
     }
 
     pub fn try_clone(&self) -> Option<Self> {
-        if Arc::strong_count(&self.0) > Self::MAX {
-            None
-        } else {
-            Some(Self(self.0.clone()))
-        }
+        if Arc::strong_count(&self.0) > Self::MAX { None } else { Some(Self(self.0.clone())) }
     }
 }
 impl fmt::Debug for Depth {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        f.debug_tuple("Depth")
-            .field(&Arc::strong_count(&self.0))
-            .finish()
+        f.debug_tuple("Depth").field(&Arc::strong_count(&self.0)).finish()
     }
 }
 
 bitflags! {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash)]
     pub struct CodeFlags: u32 {
         const OPTIMIZED                   = 0x1;
         const NEWLOCALS                   = 0x2;
@@ -99,8 +92,24 @@ bitflags! {
         const FUTURE_UNICODE_LITERALS = 0x20000;
         const FUTURE_BARRY_AS_BDFL    = 0x40000;
         const FUTURE_GENERATOR_STOP   = 0x80000;
-        #[allow(clippy::unreadable_literal)]
         const FUTURE_ANNOTATIONS     = 0x100000;
+    }
+}
+
+// bitflags 2 derives a `CodeFlags(NAME | NAME)` Debug; reproduce the bare
+// `NAME | NAME` form that python_code_repr renders into Python-style output.
+impl fmt::Debug for CodeFlags {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.is_empty() {
+            return f.write_str("(empty)");
+        }
+        for (i, (name, _)) in self.iter_names().enumerate() {
+            if i > 0 {
+                f.write_str(" | ")?;
+            }
+            f.write_str(name)?;
+        }
+        Ok(())
     }
 }
 
@@ -123,7 +132,6 @@ pub struct Code {
     pub lnotab:          Arc<Vec<u8>>,
 }
 
-#[rustfmt::skip]
 #[rustfmt::skip]
 pub enum Obj {
     None,
@@ -175,9 +183,6 @@ macro_rules! define_extract {
     ($extract_fn:ident($variant:ident) -> ArcRwLock<$ret:ty>) => {
         define_extract! { $extract_fn -> ArcRwLock<$ret> { $variant(x) => x } }
     };
-    ($extract_fn:ident($variant:ident) -> ArcRwLock<$ret:ty>) => {
-        define_extract! { $extract_fn -> ArcRwLock<$ret> { $variant(x) => x } }
-    };
     ($extract_fn:ident($variant:ident) -> $ret:ty) => {
         define_extract! { $extract_fn -> $ret { $variant(x) => x } }
     };
@@ -195,8 +200,7 @@ macro_rules! define_extract {
 }
 macro_rules! define_is {
     ($is_fn:ident($variant:ident$(($($pat:pat),+))?)) => {
-        /// # Errors
-        /// Returns a reference to self if extraction fails
+        /// Returns whether this is the corresponding variant.
         #[must_use]
         pub fn $is_fn(&self) -> bool {
             if let Self::$variant$(($($pat),+))? = self {
@@ -283,24 +287,20 @@ impl TryFrom<&ObjHashable> for Obj {
             ObjHashable::Bool(x) => Ok(Self::Bool(*x)),
             ObjHashable::Long(x) => Ok(Self::Long(Arc::new(RwLock::new(x.as_ref().clone())))),
             ObjHashable::Float(x) => Ok(Self::Float(x.0)),
-            ObjHashable::Complex(Complex { re, im }) => Ok(Self::Complex(Complex {
-                re: re.0,
-                im: im.0,
-            })),
+            ObjHashable::Complex(Complex { re, im }) => Ok(Self::Complex(Complex { re: re.0, im: im.0 })),
             ObjHashable::String(x) => Ok(Self::String(Arc::new(RwLock::new(x.as_ref().clone())))),
             ObjHashable::Tuple(x) => Ok(Self::Tuple(Arc::new(RwLock::new(
-                x.iter()
-                    .map(Self::try_from)
-                    .collect::<Result<Vec<Self>, ObjHashable>>()?,
+                x.iter().map(Self::try_from).collect::<Result<Vec<Self>, ObjHashable>>()?,
             )))),
-            ObjHashable::FrozenSet(x) => Ok(Self::FrozenSet(Arc::new(RwLock::new(
-                x.0.iter().cloned().collect::<HashSet<ObjHashable>>(),
-            )))),
+            ObjHashable::FrozenSet(x) => {
+                Ok(Self::FrozenSet(Arc::new(RwLock::new(x.0.iter().cloned().collect::<HashSet<ObjHashable>>()))))
+            }
         }
     }
 }
 
 impl Obj {
+    #[must_use]
     pub fn typ(&self) -> Type {
         match self {
             Self::None => Type::None,
@@ -308,17 +308,17 @@ impl Obj {
             Self::Ellipsis => Type::Ellipsis,
             Self::Bool(true) => Type::True,
             Self::Bool(false) => Type::False,
-            Self::Long(x) => Type::Long,
-            &Self::Float(x) => Type::Float,
-            &Self::Complex(x) => Type::Complex,
-            Self::Bytes(x) => Type::Bytes,
-            Self::String(x) => Type::String,
-            Self::Tuple(x) => Type::Tuple,
-            Self::List(x) => Type::List,
-            Self::Dict(x) => Type::Dict,
-            Self::Set(x) => Type::Set,
-            Self::FrozenSet(x) => Type::FrozenSet,
-            Self::Code(x) => Type::Code,
+            Self::Long(_) => Type::Long,
+            Self::Float(_) => Type::Float,
+            Self::Complex(_) => Type::Complex,
+            Self::Bytes(_) => Type::Bytes,
+            Self::String(_) => Type::String,
+            Self::Tuple(_) => Type::Tuple,
+            Self::List(_) => Type::List,
+            Self::Dict(_) => Type::Dict,
+            Self::Set(_) => Type::Set,
+            Self::FrozenSet(_) => Type::FrozenSet,
+            Self::Code(_) => Type::Code,
         }
     }
 }
@@ -334,11 +334,7 @@ fn python_float_repr_core(f: &mut fmt::Formatter, x: f64) -> fmt::Result {
     if x.is_nan() {
         write!(f, "float('nan')")
     } else if x.is_infinite() {
-        if x.is_sign_positive() {
-            write!(f, "float('inf')")
-        } else {
-            write!(f, "-float('inf')")
-        }
+        if x.is_sign_positive() { write!(f, "float('inf')") } else { write!(f, "-float('inf')") }
     } else {
         // properly handle -0.0
         if x.is_sign_negative() {
@@ -416,7 +412,24 @@ fn python_frozenset_repr(f: &mut fmt::Formatter, x: &HashSet<ObjHashable>) -> fm
     Ok(())
 }
 fn python_code_repr(f: &mut fmt::Formatter, x: &Code) -> fmt::Result {
-    write!(f, "code(argcount={:?}, nlocals={:?}, stacksize={:?}, flags={:?}, code={:?}, consts={:?}, names={:?}, varnames={:?}, freevars={:?}, cellvars={:?}, filename={:?}, name={:?}, firstlineno={:?}, lnotab=bytes({:?}))", x.argcount, x.nlocals, x.stacksize, x.flags, Obj::Bytes(Arc::new(RwLock::new(x.code.as_ref().clone()))), x.consts, x.names, x.varnames, x.freevars, x.cellvars, x.filename, x.name, x.firstlineno, &x.lnotab)
+    write!(
+        f,
+        "code(argcount={:?}, nlocals={:?}, stacksize={:?}, flags={:?}, code={:?}, consts={:?}, names={:?}, varnames={:?}, freevars={:?}, cellvars={:?}, filename={:?}, name={:?}, firstlineno={:?}, lnotab=bytes({:?}))",
+        x.argcount,
+        x.nlocals,
+        x.stacksize,
+        x.flags,
+        Obj::Bytes(Arc::new(RwLock::new(x.code.as_ref().clone()))),
+        x.consts,
+        x.names,
+        x.varnames,
+        x.freevars,
+        x.cellvars,
+        x.filename,
+        x.name,
+        x.firstlineno,
+        &x.lnotab
+    )
 }
 /// This is a f64 wrapper suitable for use as a key in a (Hash)Map, since NaNs compare equal to
 /// each other, so it can implement Eq and Hash. `HashF64(-0.0) == HashF64(0.0)`.
@@ -505,19 +518,14 @@ impl TryFrom<&Obj> for ObjHashable {
             Obj::Bool(x) => Ok(Self::Bool(*x)),
             Obj::Long(x) => Ok(Self::Long(Arc::new(x.read().unwrap().clone()))),
             Obj::Float(x) => Ok(Self::Float(HashF64(*x))),
-            Obj::Complex(Complex { re, im }) => Ok(Self::Complex(Complex {
-                re: HashF64(*re),
-                im: HashF64(*im),
-            })),
+            Obj::Complex(Complex { re, im }) => Ok(Self::Complex(Complex { re: HashF64(*re), im: HashF64(*im) })),
             Obj::String(x) => Ok(Self::String(Arc::new(x.read().unwrap().clone()))),
             Obj::Tuple(x) => Ok(Self::Tuple(Arc::new(
-                x.read().unwrap().iter()
-                    .map(Self::try_from)
-                    .collect::<Result<Vec<Self>, Obj>>()?,
+                x.read().unwrap().iter().map(Self::try_from).collect::<Result<Vec<Self>, Obj>>()?,
             ))),
-            Obj::FrozenSet(x) => Ok(Self::FrozenSet(Arc::new(
-                x.read().unwrap().iter().cloned().collect::<HashableHashSet<Self>>(),
-            ))),
+            Obj::FrozenSet(x) => {
+                Ok(Self::FrozenSet(Arc::new(x.read().unwrap().iter().cloned().collect::<HashableHashSet<Self>>())))
+            }
             x => Err(x.clone()),
         }
     }
@@ -532,13 +540,7 @@ impl fmt::Debug for ObjHashable {
             Self::Bool(false) => write!(f, "False"),
             Self::Long(x) => write!(f, "{}", x),
             Self::Float(x) => python_float_repr_full(f, x.0),
-            Self::Complex(x) => python_complex_repr(
-                f,
-                Complex {
-                    re: x.re.0,
-                    im: x.im.0,
-                },
-            ),
+            Self::Complex(x) => python_complex_repr(f, Complex { re: x.re.0, im: x.im.0 }),
             Self::String(x) => python_string_repr(f, x.as_ref().as_ref()),
             Self::Tuple(x) => python_tuple_hashable_repr(f, x),
             Self::FrozenSet(x) => python_frozenset_repr(f, &x.0),
@@ -560,7 +562,7 @@ fn python_tuple_hashable_repr(f: &mut fmt::Formatter, x: &[ObjHashable]) -> fmt:
 #[cfg(test)]
 mod test {
     use super::{Code, CodeFlags, Obj, ObjHashable};
-    use bstr::{BString, ByteSlice};
+    use bstr::BString;
     use num_bigint::BigInt;
     use num_complex::Complex;
     use std::{
@@ -575,39 +577,21 @@ mod test {
         assert_eq!(format!("{:?}", Obj::Ellipsis), "Ellipsis");
         assert_eq!(format!("{:?}", Obj::Bool(true)), "True");
         assert_eq!(format!("{:?}", Obj::Bool(false)), "False");
-        assert_eq!(
-            format!("{:?}", Obj::Long(Arc::new(RwLock::new(BigInt::from(-123))))),
-            "-123"
-        );
+        assert_eq!(format!("{:?}", Obj::Long(Arc::new(RwLock::new(BigInt::from(-123))))), "-123");
         assert_eq!(format!("{:?}", Obj::Tuple(Arc::new(RwLock::new(vec![])))), "()");
+        assert_eq!(format!("{:?}", Obj::Tuple(Arc::new(RwLock::new(vec![Obj::Bool(true)])))), "(True,)");
         assert_eq!(
-            format!("{:?}", Obj::Tuple(Arc::new(RwLock::new(vec![Obj::Bool(true)])))),
-            "(True,)"
-        );
-        assert_eq!(
-            format!(
-                "{:?}",
-                Obj::Tuple(Arc::new(RwLock::new(vec![Obj::Bool(true), Obj::None])))
-            ),
+            format!("{:?}", Obj::Tuple(Arc::new(RwLock::new(vec![Obj::Bool(true), Obj::None])))),
             "(True, None)"
         );
-        assert_eq!(
-            format!(
-                "{:?}",
-                Obj::List(Arc::new(RwLock::new(vec![Obj::Bool(true)])))
-            ),
-            "[True]"
-        );
+        assert_eq!(format!("{:?}", Obj::List(Arc::new(RwLock::new(vec![Obj::Bool(true)])))), "[True]");
         assert_eq!(
             format!(
                 "{:?}",
                 Obj::Dict(Arc::new(RwLock::new(
-                    vec![(
-                        ObjHashable::Bool(true),
-                        Obj::Bytes(Arc::new(RwLock::new(Vec::from(b"a" as &[u8]))))
-                    )]
-                    .into_iter()
-                    .collect::<HashMap<_, _>>()
+                    vec![(ObjHashable::Bool(true), Obj::Bytes(Arc::new(RwLock::new(Vec::from(b"a" as &[u8])))))]
+                        .into_iter()
+                        .collect::<HashMap<_, _>>()
                 )))
             ),
             "{True: b\"a\"}"
@@ -615,11 +599,7 @@ mod test {
         assert_eq!(
             format!(
                 "{:?}",
-                Obj::Set(Arc::new(RwLock::new(
-                    vec![ObjHashable::Bool(true)]
-                        .into_iter()
-                        .collect::<HashSet<_>>()
-                )))
+                Obj::Set(Arc::new(RwLock::new(vec![ObjHashable::Bool(true)].into_iter().collect::<HashSet<_>>())))
             ),
             "{True}"
         );
@@ -627,29 +607,33 @@ mod test {
             format!(
                 "{:?}",
                 Obj::FrozenSet(Arc::new(RwLock::new(
-                    vec![ObjHashable::Bool(true)]
-                        .into_iter()
-                        .collect::<HashSet<_>>()
+                    vec![ObjHashable::Bool(true)].into_iter().collect::<HashSet<_>>()
                 )))
             ),
             "frozenset({True})"
         );
-        assert_eq!(format!("{:?}", Obj::Code(Arc::new(RwLock::new(Code {
-            argcount: 0,
-            nlocals: 3,
-            stacksize: 4,
-            flags: CodeFlags::NESTED | CodeFlags::COROUTINE,
-             code: Arc::new(Vec::from(b"abc" as &[u8])),
-            consts: Arc::new(vec![Obj::Bool(true)]),
-            names: vec![],
-            varnames: vec![Arc::new(BString::from("a"))],
-            freevars: vec![Arc::new(BString::from("b")), Arc::new(BString::from("c"))],
-            cellvars: vec![Arc::new(BString::from("de"))],
-            filename: Arc::new(BString::from("xyz.py")),
-            name: Arc::new(BString::from("fgh")),
-            firstlineno: 5,
-            lnotab: Arc::new(vec![255, 0, 45, 127, 0, 73]),
-        })))), "code(argcount=0, nlocals=3, stacksize=4, flags=NESTED | COROUTINE, code=b\"abc\", consts=[True], names=[], varnames=[\"a\"], freevars=[\"b\", \"c\"], cellvars=[\"de\"], filename=\"xyz.py\", name=\"fgh\", firstlineno=5, lnotab=bytes([255, 0, 45, 127, 0, 73]))");
+        assert_eq!(
+            format!(
+                "{:?}",
+                Obj::Code(Arc::new(RwLock::new(Code {
+                    argcount: 0,
+                    nlocals: 3,
+                    stacksize: 4,
+                    flags: CodeFlags::NESTED | CodeFlags::COROUTINE,
+                    code: Arc::new(Vec::from(b"abc" as &[u8])),
+                    consts: Arc::new(vec![Obj::Bool(true)]),
+                    names: vec![],
+                    varnames: vec![Arc::new(BString::from("a"))],
+                    freevars: vec![Arc::new(BString::from("b")), Arc::new(BString::from("c"))],
+                    cellvars: vec![Arc::new(BString::from("de"))],
+                    filename: Arc::new(BString::from("xyz.py")),
+                    name: Arc::new(BString::from("fgh")),
+                    firstlineno: 5,
+                    lnotab: Arc::new(vec![255, 0, 45, 127, 0, 73]),
+                })))
+            ),
+            "code(argcount=0, nlocals=3, stacksize=4, flags=NESTED | COROUTINE, code=b\"abc\", consts=[True], names=[], varnames=[\"a\"], freevars=[\"b\", \"c\"], cellvars=[\"de\"], filename=\"xyz.py\", name=\"fgh\", firstlineno=5, lnotab=bytes([255, 0, 45, 127, 0, 73]))"
+        );
     }
 
     #[test]
@@ -664,70 +648,29 @@ mod test {
 
     #[test]
     fn test_complex_debug_repr() {
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: 2., im: 1. })),
-            "(2+1j)"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: 0., im: 1. })),
-            "1j"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: 2., im: 0. })),
-            "(2+0j)"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: 0., im: 0. })),
-            "0j"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: -2., im: 1. })),
-            "(-2+1j)"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: -2., im: 0. })),
-            "(-2+0j)"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: 2., im: -1. })),
-            "(2-1j)"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: 0., im: -1. })),
-            "-1j"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: -2., im: -1. })),
-            "(-2-1j)"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: 0., im: -1. })),
-            "-1j"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: -2., im: 0. })),
-            "(-2+0j)"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: -0., im: 1. })),
-            "(-0+1j)"
-        );
-        assert_eq!(
-            format!("{:?}", Obj::Complex(Complex { re: -0., im: -1. })),
-            "(-0-1j)"
-        );
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: 2., im: 1. })), "(2+1j)");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: 0., im: 1. })), "1j");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: 2., im: 0. })), "(2+0j)");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: 0., im: 0. })), "0j");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: -2., im: 1. })), "(-2+1j)");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: -2., im: 0. })), "(-2+0j)");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: 2., im: -1. })), "(2-1j)");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: 0., im: -1. })), "-1j");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: -2., im: -1. })), "(-2-1j)");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: 0., im: -1. })), "-1j");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: -2., im: 0. })), "(-2+0j)");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: -0., im: 1. })), "(-0+1j)");
+        assert_eq!(format!("{:?}", Obj::Complex(Complex { re: -0., im: -1. })), "(-0-1j)");
     }
 
     #[test]
     fn test_bytes_string_debug_repr() {
-        assert_eq!(format!("{:?}", Obj::Bytes(Arc::new(RwLock::new(Vec::from(
-                            b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe" as &[u8]
-                            ))))),
-        "b\"\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\t\\n\\x0b\\x0c\\r\\x0e\\x0f\\x10\\x11\\x12\\x13\\x14\\x15\\x16\\x17\\x18\\x19\\x1a\\x1b\\x1c\\x1d\\x1e\\x1f !\\\"#$%&\\\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\\x7f\\x80\\x81\\x82\\x83\\x84\\x85\\x86\\x87\\x88\\x89\\x8a\\x8b\\x8c\\x8d\\x8e\\x8f\\x90\\x91\\x92\\x93\\x94\\x95\\x96\\x97\\x98\\x99\\x9a\\x9b\\x9c\\x9d\\x9e\\x9f\\xa0\\xa1\\xa2\\xa3\\xa4\\xa5\\xa6\\xa7\\xa8\\xa9\\xaa\\xab\\xac\\xad\\xae\\xaf\\xb0\\xb1\\xb2\\xb3\\xb4\\xb5\\xb6\\xb7\\xb8\\xb9\\xba\\xbb\\xbc\\xbd\\xbe\\xbf\\xc0\\xc1\\xc2\\xc3\\xc4\\xc5\\xc6\\xc7\\xc8\\xc9\\xca\\xcb\\xcc\\xcd\\xce\\xcf\\xd0\\xd1\\xd2\\xd3\\xd4\\xd5\\xd6\\xd7\\xd8\\xd9\\xda\\xdb\\xdc\\xdd\\xde\\xdf\\xe0\\xe1\\xe2\\xe3\\xe4\\xe5\\xe6\\xe7\\xe8\\xe9\\xea\\xeb\\xec\\xed\\xee\\xef\\xf0\\xf1\\xf2\\xf3\\xf4\\xf5\\xf6\\xf7\\xf8\\xf9\\xfa\\xfb\\xfc\\xfd\\xfe\""
-        );
-        assert_eq!(format!("{:?}", Obj::String(Arc::new(RwLock::new(BString::from(
-                            "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f"))))),
-                            "\"\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\t\\n\\x0b\\x0c\\r\\x0e\\x0f\\x10\\x11\\x12\\x13\\x14\\x15\\x16\\x17\\x18\\x19\\x1a\\x1b\\x1c\\x1d\\x1e\\x1f !\\\"#$%&\\\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\\x7f\"");
+        let all_bytes: Vec<u8> = (0..=0xfe).collect();
+        // Bytes repr is our own python_bytes_repr.
+        insta::assert_snapshot!("bytes", format!("{:?}", Obj::Bytes(Arc::new(RwLock::new(all_bytes)))));
+        // String repr delegates to bstr's escaping.
+        let ascii: Vec<u8> = (0..=0x7f).collect();
+        insta::assert_snapshot!("string", format!("{:?}", Obj::String(Arc::new(RwLock::new(BString::from(ascii))))));
     }
 }
 
@@ -748,11 +691,7 @@ mod utils {
         let mut p = Vec::<u32>::new();
         for (i, &thisdigit) in digits.iter().enumerate() {
             accum |= u64::from(thisdigit) << accumbits;
-            accumbits += if i == digits.len() - 1 {
-                16 - (thisdigit.leading_zeros() as u8)
-            } else {
-                15
-            };
+            accumbits += if i == digits.len() - 1 { 16 - (thisdigit.leading_zeros() as u8) } else { 15 };
 
             // Modified to get u32s instead of u8s.
             while accumbits >= 32 {
@@ -781,15 +720,12 @@ mod utils {
         use super::biguint_from_pylong_digits;
         use num_bigint::BigUint;
 
-        #[allow(clippy::inconsistent_digit_grouping)]
+        // Grouping mirrors the 15-bit pylong digit boundaries on purpose.
+        #[allow(clippy::inconsistent_digit_grouping, clippy::unusual_byte_groupings)]
         #[test]
         fn test_biguint_from_pylong_digits() {
             assert_eq!(
-                biguint_from_pylong_digits(&[
-                    0b000_1101_1100_0100,
-                    0b110_1101_0010_0100,
-                    0b001_0000_1001_1101
-                ]),
+                biguint_from_pylong_digits(&[0b000_1101_1100_0100, 0b110_1101_0010_0100, 0b001_0000_1001_1101]),
                 BigUint::from(0b001_0000_1001_1101_110_1101_0010_0100_000_1101_1100_0100_u64)
             );
         }

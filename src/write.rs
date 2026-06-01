@@ -69,19 +69,13 @@ fn w_pylong(value: &BigInt, w: &mut impl Write) -> io::Result<()> {
     let mut digits: Vec<u16> = Vec::new();
     while !mag.is_zero() {
         // Low 15 bits of the remaining magnitude.
-        let digit = (&mag & &mask)
-            .to_u16()
-            .expect("15-bit masked value always fits a u16");
+        let digit = (&mag & &mask).to_u16().expect("15-bit masked value always fits a u16");
         digits.push(digit);
         mag >>= 15u32;
     }
 
     let count = digits.len() as i32;
-    let signed_count = if let num_bigint::Sign::Minus = sign {
-        -count
-    } else {
-        count
-    };
+    let signed_count = if let num_bigint::Sign::Minus = sign { -count } else { count };
     w_long(signed_count as u32, w)?;
     for digit in digits {
         w_short(digit, w)?;
@@ -194,16 +188,11 @@ fn w_object(obj: &Obj, w: &mut impl Write) -> io::Result<()> {
     }
 }
 
-fn w_hashset(
-    typ: Type,
-    set: &std::collections::HashSet<ObjHashable>,
-    w: &mut impl Write,
-) -> io::Result<()> {
+fn w_hashset(typ: Type, set: &std::collections::HashSet<ObjHashable>, w: &mut impl Write) -> io::Result<()> {
     w_type(typ, w)?;
     w_long(set.len() as u32, w)?;
     for element in set.iter() {
-        let element_obj =
-            Obj::try_from(element).expect("hashable element converts back to an object");
+        let element_obj = Obj::try_from(element).expect("hashable element converts back to an object");
         w_object(&element_obj, w)?;
     }
     Ok(())
@@ -279,12 +268,8 @@ mod test {
     #[test]
     fn strings_and_bytes() {
         assert_roundtrips(&Obj::String(Arc::new(RwLock::new(BString::from("")))));
-        assert_roundtrips(&Obj::String(Arc::new(RwLock::new(BString::from(
-            "Andr\u{e8} Previn",
-        )))));
-        assert_roundtrips(&Obj::String(Arc::new(RwLock::new(BString::from(
-            " ".repeat(10_000),
-        )))));
+        assert_roundtrips(&Obj::String(Arc::new(RwLock::new(BString::from("Andr\u{e8} Previn")))));
+        assert_roundtrips(&Obj::String(Arc::new(RwLock::new(BString::from(" ".repeat(10_000))))));
         // Arbitrary (non-UTF-8) bytes must survive too.
         let raw: Vec<u8> = (0..=255u8).collect();
         assert_roundtrips(&Obj::String(Arc::new(RwLock::new(BString::from(raw)))));
@@ -315,28 +300,17 @@ mod test {
             ObjHashable::String(Arc::new(BString::from("a"))),
             Obj::Long(Arc::new(RwLock::new(BigInt::from(1)))),
         );
-        map.insert(
-            ObjHashable::String(Arc::new(BString::from("b"))),
-            Obj::Bool(true),
-        );
+        map.insert(ObjHashable::String(Arc::new(BString::from("b"))), Obj::Bool(true));
         let obj = Obj::Dict(Arc::new(RwLock::new(map)));
         let back = roundtrip(&obj);
         let back = back.extract_dict().unwrap();
         let back = back.read().unwrap();
         assert_eq!(back.len(), 2);
         assert_eq!(
-            *back[&ObjHashable::String(Arc::new(BString::from("a")))]
-                .clone()
-                .extract_long()
-                .unwrap()
-                .read()
-                .unwrap(),
+            *back[&ObjHashable::String(Arc::new(BString::from("a")))].clone().extract_long().unwrap().read().unwrap(),
             BigInt::from(1)
         );
-        assert!(back[&ObjHashable::String(Arc::new(BString::from("b")))]
-            .clone()
-            .extract_bool()
-            .unwrap());
+        assert!(back[&ObjHashable::String(Arc::new(BString::from("b")))].clone().extract_bool().unwrap());
     }
 
     #[test]
@@ -344,10 +318,7 @@ mod test {
         let mut set = HashSet::new();
         set.insert(ObjHashable::String(Arc::new(BString::from("x"))));
         set.insert(ObjHashable::String(Arc::new(BString::from("y"))));
-        for obj in [
-            Obj::Set(Arc::new(RwLock::new(set.clone()))),
-            Obj::FrozenSet(Arc::new(RwLock::new(set.clone()))),
-        ] {
+        for obj in [Obj::Set(Arc::new(RwLock::new(set.clone()))), Obj::FrozenSet(Arc::new(RwLock::new(set.clone())))] {
             let back = roundtrip(&obj);
             let len = match &back {
                 Obj::Set(s) => s.read().unwrap().len(),
@@ -399,11 +370,7 @@ mod test {
         assert_eq!(*back.filename, *original.filename);
         assert_eq!(*back.name, *original.name);
         assert!(back.names.iter().map(|n| n.to_string()).eq(original.names.iter().map(|n| n.to_string())));
-        assert!(back
-            .varnames
-            .iter()
-            .map(|n| n.to_string())
-            .eq(original.varnames.iter().map(|n| n.to_string())));
+        assert!(back.varnames.iter().map(|n| n.to_string()).eq(original.varnames.iter().map(|n| n.to_string())));
     }
 
     #[test]

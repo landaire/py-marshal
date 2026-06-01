@@ -1,8 +1,9 @@
 [package]
 name = "py27-marshal"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Solomon Ucko <solly.ucko@gmail.com>", "Lander Brandt <lander.griffith+cratesio@gmail.com>"]
-edition = "2018"
+edition = "2024"
+rust-version = "1.87"
 description = "A Rust port of https://github.com/python/cpython/blob/master/Python/marshal.c"
 license = "MIT"
 repository = "https://github.com/landaire/py-marshal"
@@ -11,14 +12,13 @@ categories = ["emulators", "encoding", "parser-implementations", "parsing"]
 keywords = ["python", "marshal", "read", "decode"]
 
 [dependencies]
-bitflags = "1"
+bitflags = "2"
 num-traits = "0.2"
-num-derive = "0.3"
+num-derive = "0.4"
 num-bigint = "0.4"
 num-complex = "0.4"
-owning_ref = { version = "0.4", optional = true }
-bstr = "1.0"
-thiserror = "1.0"
+bstr = "1"
+thiserror = "2"
 
-[features]
-default = []
+[dev-dependencies]
+insta = "1.47.2"
