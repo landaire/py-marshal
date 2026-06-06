@@ -1,6 +1,6 @@
 [package]
 name = "py27-marshal"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Solomon Ucko <solly.ucko@gmail.com>", "Lander Brandt <lander.griffith+cratesio@gmail.com>"]
 edition = "2024"
 rust-version = "1.87"
